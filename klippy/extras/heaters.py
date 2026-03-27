@@ -30,6 +30,8 @@ class Heater:
         self.sensor.setup_minmax(self.min_temp, self.max_temp)
         self.sensor.setup_callback(self.temperature_callback)
         self.pwm_delay = self.sensor.get_report_time_delta()
+        if hasattr(self.sensor, "setup_pwm_callback"):
+            self.sensor.setup_pwm_callback(self.pwm_callback)
         # Setup temperature checks
         self.min_extrude_temp = config.getfloat(
             'min_extrude_temp', 170.,
@@ -49,17 +51,31 @@ class Heater:
         self.next_pwm_time = 0.
         self.last_pwm_value = 0.
         # Setup control algorithm sub-class
-        algos = {'watermark': ControlBangBang, 'pid': ControlPID}
+        algos = {'watermark': ControlBangBang, 'pid': ControlPID,
+                 'hcu': ControlHCU}
         algo = config.getchoice('control', algos)
         self.control = algo(self, config)
         # Setup output heater pin
         heater_pin = config.get('heater_pin')
-        ppins = self.printer.lookup_object('pins')
-        self.mcu_pwm = ppins.setup_pin('pwm', heater_pin)
-        pwm_cycle_time = config.getfloat('pwm_cycle_time', 0.100, above=0.,
-                                         maxval=self.pwm_delay)
-        self.mcu_pwm.setup_cycle_time(pwm_cycle_time)
-        self.mcu_pwm.setup_max_duration(MAX_HEAT_TIME)
+        self.hcu_heater = None
+        if heater_pin != "induction":
+            ppins = self.printer.lookup_object('pins')
+            self.mcu_pwm = ppins.setup_pin('pwm', heater_pin)
+            pwm_cycle_time = config.getfloat('pwm_cycle_time', 0.100, above=0.,
+                                             maxval=self.pwm_delay)
+            self.mcu_pwm.setup_cycle_time(pwm_cycle_time)
+            self.mcu_pwm.setup_max_duration(MAX_HEAT_TIME)
+        else:
+            self.mcu_pwm = None
+            self.hcu_heater = self.printer.lookup_object(
+                "mcu hcu").setup_register(0x4018)
+        if self.hcu_heater is None and isinstance(self.control, ControlHCU):
+            raise config.error("Heater control 'hcu' requires"
+                               " heater_pin 'induction'")
+        if self.hcu_heater is not None and not isinstance(
+                self.control, ControlHCU):
+            raise config.error("Heater pin 'induction' requires"
+                               " control 'hcu'")
         # Load additional modules
         self.printer.load_object(config, "verify_heater %s" % (short_name,))
         self.printer.load_object(config, "pid_calibrate")
@@ -95,6 +111,9 @@ class Heater:
             self.smoothed_temp += temp_diff * adj_time
             self.can_extrude = (self.smoothed_temp >= self.min_extrude_temp)
         #logging.debug("temp: %.3f %f = %f", read_time, temp)
+    def pwm_callback(self, read_time, duty_cycle):
+        with self.lock:
+            self.last_pwm_value = duty_cycle
     def _handle_shutdown(self):
         self.verify_mainthread_time = -999.
     # External commands
@@ -114,7 +133,12 @@ class Heater:
         with self.lock:
             self.target_temp = degrees
     def get_temp(self, eventtime):
-        est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(eventtime)
+        if self.hcu_heater is not None:
+            est_print_time = self.hcu_heater.get_mcu().estimated_print_time(
+                eventtime)
+        else:
+            est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
+                eventtime)
         quell_time = est_print_time - QUELL_STALE_TIME
         with self.lock:
             if self.last_temp_time < quell_time:
@@ -135,7 +159,12 @@ class Heater:
             target_temp = max(self.min_temp, min(self.max_temp, target_temp))
         self.target_temp = target_temp
     def stats(self, eventtime):
-        est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(eventtime)
+        if self.hcu_heater is not None:
+            est_print_time = self.hcu_heater.get_mcu().estimated_print_time(
+                eventtime)
+        else:
+            est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
+                eventtime)
         if not self.printer.is_shutdown():
             self.verify_mainthread_time = est_print_time + MAX_MAINTHREAD_TIME
         with self.lock:
@@ -233,6 +262,20 @@ class ControlPID:
         temp_diff = target_temp - smoothed_temp
         return (abs(temp_diff) > PID_SETTLE_DELTA
                 or abs(self.prev_temp_deriv) > PID_SETTLE_SLOPE)
+
+
+######################################################################
+# HCU control
+######################################################################
+
+class ControlHCU:
+    def __init__(self, heater, config):
+        self.heater = heater
+        self.max_delta = config.getfloat('max_delta', 2.0, above=0.)
+    def temperature_update(self, read_time, temp, target_temp):
+        self.heater.hcu_heater.register_write(read_time, target_temp)
+    def check_busy(self, eventtime, smoothed_temp, target_temp):
+        return smoothed_temp < target_temp-self.max_delta
 
 
 ######################################################################

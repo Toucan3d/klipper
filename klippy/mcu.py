@@ -647,6 +647,51 @@ class MCU_adc:
         if self._callback is not None:
             self._callback(samples)
 
+class HCU_register:
+    def __init__(self, mcu, address):
+        self._mcu = mcu
+        self._oid = None
+        self._last_clock = 0
+        self._address = address
+        self._sample_time = self._report_time = 0.1
+        self._callback = None
+        self._last_state = (0, 0.)
+        self._mcu.register_config_callback(self._build_config)
+    def get_mcu(self):
+        return self._mcu
+    def register_write(self, print_time, value):
+        clock = self._mcu.print_time_to_clock(print_time)
+        self._temp_set_cmd.send([int(value * 10), clock],
+                                minclock=self._last_clock, reqclock=clock)
+        self._last_clock = clock
+    def setup_register_read_callback(self, report_time, callback):
+        self._report_time = report_time
+        self._callback = callback
+    def _build_config(self):
+        self._oid = self._mcu.create_oid()
+        cmd_queue = self._mcu.alloc_command_queue()
+        self._mcu.add_config_cmd("config_hcu oid=%d addr=%d" % (
+            self._oid, self._address))
+        clock = self._mcu.get_query_slot(self._oid)
+        sample_ticks = self._mcu.seconds_to_clock(self._sample_time)
+        self._report_clock = self._mcu.seconds_to_clock(self._report_time)
+        self._mcu.add_config_cmd(
+            "query_hcu_value oid=%d clock=%d sample_ticks=%d" % (
+                self._oid, clock, sample_ticks), is_init=True)
+        self._mcu.register_serial_response(
+            self._handle_hcu_stats,
+            "hcu_value oid=%c next_clock=%u value=%hu", self._oid)
+        self._temp_set_cmd = self._mcu.lookup_command(
+            "hotend_set_temperature value=%u clock=%u", cq=cmd_queue)
+    def _handle_hcu_stats(self, params):
+        last_value = params['value']
+        next_clock = self._mcu.clock32_to_clock64(params['next_clock'])
+        last_read_clock = next_clock - self._report_clock
+        last_read_time = self._mcu.clock_to_print_time(last_read_clock)
+        self._last_state = (last_value, last_read_time)
+        if self._callback is not None:
+            self._callback(last_read_time, last_value)
+
 
 ######################################################################
 # Main MCU class (and its helper classes)
@@ -1171,6 +1216,8 @@ class MCU:
     # MCU Configuration wrappers
     def setup_pin(self, pin_type, pin_params):
         return self._config_helper.setup_pin(pin_type, pin_params)
+    def setup_register(self, addr):
+        return HCU_register(self, addr)
     def create_oid(self):
         return self._config_helper.create_oid()
     def register_config_callback(self, cb):
