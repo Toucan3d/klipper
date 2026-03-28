@@ -88,6 +88,10 @@ class Heater:
                 "MEASURE_RESONANCE_FREQUENCY", "HEATER", short_name,
                 self.cmd_MEASURE_RESONANCE_FREQUENCY,
                 desc=self.cmd_MEASURE_RESONANCE_FREQUENCY_help)
+            gcode.register_mux_command(
+                "SET_HEATER_CURRENT_LIMIT", "HEATER", short_name,
+                self.cmd_SET_HEATER_CURRENT_LIMIT,
+                desc=self.cmd_SET_HEATER_CURRENT_LIMIT_help)
         self.printer.register_event_handler("klippy:shutdown",
                                             self._handle_shutdown)
     def set_pwm(self, read_time, value):
@@ -200,6 +204,13 @@ class Heater:
         frequency = self.hcu_heater.measure_resonance(timeout)
         gcmd.respond_info("Heater %s resonance frequency: %d Hz"
                           % (self.short_name, frequency))
+    cmd_SET_HEATER_CURRENT_LIMIT_help = (
+        "Set the HCU heater current limit in amps")
+    def cmd_SET_HEATER_CURRENT_LIMIT(self, gcmd):
+        current_limit = gcmd.get_float('CURRENT', minval=0.)
+        self.hcu_heater.set_current_limit(current_limit)
+        gcmd.respond_info("Heater %s current limit set to %.3f A"
+                          % (self.short_name, current_limit))
 
 
 ######################################################################

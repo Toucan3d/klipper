@@ -658,6 +658,7 @@ class HCU_register:
         self._last_state = (0, 0.)
         self._resonance_cmd = None
         self._resonance_completion = None
+        self._current_limit_cmd = None
         self._mcu.register_config_callback(self._build_config)
     def get_mcu(self):
         return self._mcu
@@ -688,6 +689,14 @@ class HCU_register:
             return value
         finally:
             self._resonance_completion = None
+    def set_current_limit(self, current_limit):
+        if self._current_limit_cmd is None:
+            raise self._mcu.get_printer().command_error(
+                "Current limit control is not available on this register")
+        current_limit_ma = int(round(current_limit * 1000.))
+        if current_limit_ma < 0:
+            current_limit_ma = 0
+        self._current_limit_cmd.send([current_limit_ma])
     def _build_config(self):
         self._oid = self._mcu.create_oid()
         cmd_queue = self._mcu.alloc_command_queue()
@@ -707,6 +716,8 @@ class HCU_register:
         if self._address == 0x4018:
             self._resonance_cmd = self._mcu.lookup_command(
                 "hotend_measure_resonance", cq=cmd_queue)
+            self._current_limit_cmd = self._mcu.lookup_command(
+                "hotend_set_current_limit value=%u", cq=cmd_queue)
             self._mcu.register_serial_response(
                 self._handle_resonance_result,
                 "hotend_resonance_result value=%u")
