@@ -83,6 +83,11 @@ class Heater:
         gcode.register_mux_command("SET_HEATER_TEMPERATURE", "HEATER",
                                    short_name, self.cmd_SET_HEATER_TEMPERATURE,
                                    desc=self.cmd_SET_HEATER_TEMPERATURE_help)
+        if self.hcu_heater is not None:
+            gcode.register_mux_command(
+                "MEASURE_RESONANCE_FREQUENCY", "HEATER", short_name,
+                self.cmd_MEASURE_RESONANCE_FREQUENCY,
+                desc=self.cmd_MEASURE_RESONANCE_FREQUENCY_help)
         self.printer.register_event_handler("klippy:shutdown",
                                             self._handle_shutdown)
     def set_pwm(self, read_time, value):
@@ -186,6 +191,15 @@ class Heater:
         temp = gcmd.get_float('TARGET', 0.)
         pheaters = self.printer.lookup_object('heaters')
         pheaters.set_temperature(self, temp)
+    cmd_MEASURE_RESONANCE_FREQUENCY_help = (
+        "Run the HCU resonance sweep and report the optimal frequency")
+    def cmd_MEASURE_RESONANCE_FREQUENCY(self, gcmd):
+        timeout = gcmd.get_float('TIMEOUT', 30., above=0.)
+        with self.lock:
+            self.target_temp = 0.
+        frequency = self.hcu_heater.measure_resonance(timeout)
+        gcmd.respond_info("Heater %s resonance frequency: %d Hz"
+                          % (self.short_name, frequency))
 
 
 ######################################################################

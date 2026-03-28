@@ -656,6 +656,8 @@ class HCU_register:
         self._sample_time = self._report_time = 0.1
         self._callback = None
         self._last_state = (0, 0.)
+        self._resonance_cmd = None
+        self._resonance_completion = None
         self._mcu.register_config_callback(self._build_config)
     def get_mcu(self):
         return self._mcu
@@ -667,6 +669,25 @@ class HCU_register:
     def setup_register_read_callback(self, report_time, callback):
         self._report_time = report_time
         self._callback = callback
+    def measure_resonance(self, timeout=30.):
+        if self._resonance_cmd is None:
+            raise self._mcu.get_printer().command_error(
+                "Resonance measurement is not available on this register")
+        if self._resonance_completion is not None:
+            raise self._mcu.get_printer().command_error(
+                "Resonance measurement already in progress")
+        reactor = self._mcu.get_printer().get_reactor()
+        self._resonance_completion = reactor.completion()
+        try:
+            self._resonance_cmd.send()
+            value = self._resonance_completion.wait(
+                reactor.monotonic() + timeout)
+            if value is None:
+                raise self._mcu.get_printer().command_error(
+                    "Timeout waiting for resonance measurement result")
+            return value
+        finally:
+            self._resonance_completion = None
     def _build_config(self):
         self._oid = self._mcu.create_oid()
         cmd_queue = self._mcu.alloc_command_queue()
@@ -683,6 +704,12 @@ class HCU_register:
             "hcu_value oid=%c next_clock=%u value=%hu", self._oid)
         self._temp_set_cmd = self._mcu.lookup_command(
             "hotend_set_temperature value=%u clock=%u", cq=cmd_queue)
+        if self._address == 0x4018:
+            self._resonance_cmd = self._mcu.lookup_command(
+                "hotend_measure_resonance", cq=cmd_queue)
+            self._mcu.register_serial_response(
+                self._handle_resonance_result,
+                "hotend_resonance_result value=%u")
     def _handle_hcu_stats(self, params):
         last_value = params['value']
         next_clock = self._mcu.clock32_to_clock64(params['next_clock'])
@@ -691,6 +718,10 @@ class HCU_register:
         self._last_state = (last_value, last_read_time)
         if self._callback is not None:
             self._callback(last_read_time, last_value)
+    def _handle_resonance_result(self, params):
+        completion = self._resonance_completion
+        if completion is not None:
+            completion.complete(params['value'])
 
 
 ######################################################################
