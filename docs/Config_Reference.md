@@ -1403,6 +1403,34 @@ the nature of skew correction these lengths are set via gcode. See
 [skew_correction]
 ```
 
+### [concentricity_tolerance_compensation]
+
+Adjust XY moves to compensate for concentricity error on a synchronized
+extra axis. The module tracks a configured G-Code axis letter and
+applies an XY offset derived from that axis position.
+
+```
+[concentricity_tolerance_compensation]
+#axis: A
+#   G-Code axis letter of the synchronized extra axis to track. This
+#   must be a single extra axis letter, and it must match the axis
+#   registered with standard `G1` moves. The default is A.
+#deflection_angle: 0.0
+#   Angular offset of the concentricity error in degrees. The default
+#   is 0.0.
+#deflection_radius: 0.0
+#   Radius of the concentricity error in mm. The default is 0.0.
+#split_delta_xy: 0.025
+#   Minimum change in the computed XY compensation before a move is
+#   subdivided. The default is 0.025mm.
+#move_check_distance_axis: 5.0
+#   Distance, in the configured axis units, between checks for a change
+#   in compensation while the tracked axis is moving. The default is
+#   5.0.
+#move_check_distance_a:
+#   Legacy alias for move_check_distance_axis.
+```
+
 ### [z_thermal_adjust]
 
 Temperature-dependant toolhead Z position adjustment. Compensate for vertical

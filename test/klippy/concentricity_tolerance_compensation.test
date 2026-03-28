@@ -1,0 +1,12 @@
+# Test case for concentricity_tolerance_compensation
+CONFIG concentricity_tolerance_compensation.cfg
+DICTIONARY atmega2560.dict
+
+MANUAL_STEPPER STEPPER=ctc_axis SET_POSITION=0
+MANUAL_STEPPER STEPPER=ctc_axis GCODE_AXIS=A
+G1 X10 Y5 A180
+ASSERT_CTC_ACTIVE
+
+MANUAL_STEPPER STEPPER=ctc_axis GCODE_AXIS=
+G1 X6 Y4
+ASSERT_CTC_INACTIVE
