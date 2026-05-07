@@ -39,7 +39,14 @@ class Heater:
         is_fileoutput = (self.printer.get_start_args().get('debugoutput')
                          is not None)
         self.can_extrude = self.min_extrude_temp <= 0. or is_fileoutput
-        self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
+        heater_pin = config.get('heater_pin')
+        if heater_pin == "induction":
+            self.max_power = 1.
+            self.hcu_max_power = config.getfloat('max_power', above=0.)
+        else:
+            self.max_power = config.getfloat('max_power', 1., above=0.,
+                                             maxval=1.)
+            self.hcu_max_power = None
         self.min_pwm_change = self.max_power * MIN_PWM_CHANGE_RATIO
         self.smooth_time = config.getfloat('smooth_time', 1., above=0.)
         self.inv_smooth_time = 1. / self.smooth_time
@@ -56,7 +63,6 @@ class Heater:
         algo = config.getchoice('control', algos)
         self.control = algo(self, config)
         # Setup output heater pin
-        heater_pin = config.get('heater_pin')
         self.hcu_heater = None
         if heater_pin != "induction":
             ppins = self.printer.lookup_object('pins')
@@ -76,6 +82,9 @@ class Heater:
                 self.control, ControlHCU):
             raise config.error("Heater pin 'induction' requires"
                                " control 'hcu'")
+        if self.hcu_heater is not None:
+            self.control.setup_hcu_heater(
+                self.hcu_heater, self.hcu_max_power)
         # Load additional modules
         self.printer.load_object(config, "verify_heater %s" % (short_name,))
         self.printer.load_object(config, "pid_calibrate")
@@ -105,6 +114,9 @@ class Heater:
         self.next_pwm_time = (pwm_time + MAX_HEAT_TIME
                               - (3. * self.pwm_delay + 0.001))
         self.last_pwm_value = value
+        if self.hcu_heater is not None:
+            self.hcu_heater.set_pwm(pwm_time, value)
+            return
         self.mcu_pwm.set_pwm(pwm_time, value)
         #logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])",
         #              self.name, value, pwm_time,
@@ -128,6 +140,8 @@ class Heater:
     # External commands
     def get_name(self):
         return self.name
+    def is_hcu(self):
+        return self.hcu_heater is not None
     def get_pwm_delay(self):
         return self.pwm_delay
     def get_max_power(self):
@@ -297,6 +311,12 @@ class ControlHCU:
     def __init__(self, heater, config):
         self.heater = heater
         self.max_delta = config.getfloat('max_delta', 2.0, above=0.)
+        self.Kp = config.getfloat('pid_Kp', minval=0.)
+        self.Ki = config.getfloat('pid_Ki', minval=0.)
+        self.Kd = config.getfloat('pid_Kd', minval=0.)
+    def setup_hcu_heater(self, hcu_heater, max_power):
+        hcu_heater.setup_pid(self.Kp, self.Ki, self.Kd)
+        hcu_heater.setup_current_limit(max_power)
     def temperature_update(self, read_time, temp, target_temp):
         self.heater.hcu_heater.register_write(read_time, target_temp)
     def check_busy(self, eventtime, smoothed_temp, target_temp):

@@ -648,6 +648,8 @@ class MCU_adc:
             self._callback(samples)
 
 class HCU_register:
+    SUPPLY_VOLTAGE = 24.0
+
     def __init__(self, mcu, address):
         self._mcu = mcu
         self._oid = None
@@ -659,6 +661,9 @@ class HCU_register:
         self._resonance_cmd = None
         self._resonance_completion = None
         self._current_limit_cmd = None
+        self._pid_config = None
+        self._current_limit_config = None
+        self._pwm_set_cmd = None
         self._mcu.register_config_callback(self._build_config)
     def get_mcu(self):
         return self._mcu
@@ -697,6 +702,19 @@ class HCU_register:
         if current_limit_ma < 0:
             current_limit_ma = 0
         self._current_limit_cmd.send([current_limit_ma])
+    def setup_pid(self, kp, ki, kd):
+        self._pid_config = (kp, ki, kd)
+    def setup_current_limit(self, max_power):
+        self._current_limit_config = max_power / self.SUPPLY_VOLTAGE
+    def set_pwm(self, print_time, value):
+        if self._pwm_set_cmd is None:
+            raise self._mcu.get_printer().command_error(
+                "PWM control is not available on this register")
+        clock = self._mcu.print_time_to_clock(print_time)
+        pwm = int(max(0., min(1., value)) * 65535. + .5)
+        self._pwm_set_cmd.send([pwm, clock],
+                               minclock=self._last_clock, reqclock=clock)
+        self._last_clock = clock
     def _build_config(self):
         self._oid = self._mcu.create_oid()
         cmd_queue = self._mcu.alloc_command_queue()
@@ -718,6 +736,25 @@ class HCU_register:
                 "hotend_measure_resonance", cq=cmd_queue)
             self._current_limit_cmd = self._mcu.lookup_command(
                 "hotend_set_current_limit value=%u", cq=cmd_queue)
+            self._pwm_set_cmd = self._mcu.lookup_command(
+                "hotend_set_pwm value=%u clock=%u", cq=cmd_queue)
+            self._pid_set_cmd = self._mcu.lookup_command(
+                "hotend_set_pid kp=%u ki=%u kd=%u", cq=cmd_queue)
+            if self._pid_config is not None:
+                kp, ki, kd = self._pid_config
+                self._mcu.add_config_cmd(
+                    "hotend_set_pid kp=%d ki=%d kd=%d" % (
+                        int(round(kp * 1000.)),
+                        int(round(ki * 1000.)),
+                        int(round(kd * 1000.))), is_init=True)
+            if self._current_limit_config is not None:
+                current_limit_ma = int(round(
+                    self._current_limit_config * 1000.))
+                if current_limit_ma < 0:
+                    current_limit_ma = 0
+                self._mcu.add_config_cmd(
+                    "hotend_set_current_limit value=%d" % (
+                        current_limit_ma,), is_init=True)
             self._mcu.register_serial_response(
                 self._handle_resonance_result,
                 "hotend_resonance_result value=%u")
