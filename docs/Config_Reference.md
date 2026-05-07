@@ -971,6 +971,9 @@ heater_pin:
 #   allow the pin to be enabled for no more than half the time. This
 #   setting may be used to limit the total power output (over extended
 #   periods) to the heater. The default is 1.0.
+#resonance_frequency: 100000
+#   The HCU induction heater resonance frequency in Hz. This setting is
+#   only used when heater_pin is "induction". The default is 100000 Hz.
 sensor_type:
 #   Type of sensor - common thermistors are "EPCOS 100K B57560G104F",
 #   "ATC Semitec 104GT-2", "ATC Semitec 104NT-4-R025H42G", "Generic

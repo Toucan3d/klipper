@@ -660,9 +660,11 @@ class HCU_register:
         self._last_state = (0, 0.)
         self._resonance_cmd = None
         self._resonance_completion = None
+        self._resonance_frequency_cmd = None
         self._current_limit_cmd = None
         self._pid_config = None
         self._current_limit_config = None
+        self._resonance_frequency_config = None
         self._pwm_set_cmd = None
         self._mcu.register_config_callback(self._build_config)
     def get_mcu(self):
@@ -706,6 +708,8 @@ class HCU_register:
         self._pid_config = (kp, ki, kd)
     def setup_current_limit(self, max_power):
         self._current_limit_config = max_power / self.SUPPLY_VOLTAGE
+    def setup_resonance_frequency(self, frequency):
+        self._resonance_frequency_config = frequency
     def set_pwm(self, print_time, value):
         if self._pwm_set_cmd is None:
             raise self._mcu.get_printer().command_error(
@@ -740,6 +744,8 @@ class HCU_register:
                 "hotend_set_pwm value=%u clock=%u", cq=cmd_queue)
             self._pid_set_cmd = self._mcu.lookup_command(
                 "hotend_set_pid kp=%u ki=%u kd=%u", cq=cmd_queue)
+            self._resonance_frequency_cmd = self._mcu.lookup_command(
+                "hotend_set_resonance_frequency value=%u", cq=cmd_queue)
             if self._pid_config is not None:
                 kp, ki, kd = self._pid_config
                 self._mcu.add_config_cmd(
@@ -755,6 +761,11 @@ class HCU_register:
                 self._mcu.add_config_cmd(
                     "hotend_set_current_limit value=%d" % (
                         current_limit_ma,), is_init=True)
+            if self._resonance_frequency_config is not None:
+                self._mcu.add_config_cmd(
+                    "hotend_set_resonance_frequency value=%d" % (
+                        int(self._resonance_frequency_config),),
+                    is_init=True)
             self._mcu.register_serial_response(
                 self._handle_resonance_result,
                 "hotend_resonance_result value=%u")

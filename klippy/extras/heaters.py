@@ -43,10 +43,13 @@ class Heater:
         if heater_pin == "induction":
             self.max_power = 1.
             self.hcu_max_power = config.getfloat('max_power', above=0.)
+            self.hcu_resonance_frequency = config.getint(
+                'resonance_frequency', 100000, minval=100000, maxval=250000)
         else:
             self.max_power = config.getfloat('max_power', 1., above=0.,
                                              maxval=1.)
             self.hcu_max_power = None
+            self.hcu_resonance_frequency = None
         self.min_pwm_change = self.max_power * MIN_PWM_CHANGE_RATIO
         self.smooth_time = config.getfloat('smooth_time', 1., above=0.)
         self.inv_smooth_time = 1. / self.smooth_time
@@ -84,7 +87,8 @@ class Heater:
                                " control 'hcu'")
         if self.hcu_heater is not None:
             self.control.setup_hcu_heater(
-                self.hcu_heater, self.hcu_max_power)
+                self.hcu_heater, self.hcu_max_power,
+                self.hcu_resonance_frequency)
         # Load additional modules
         self.printer.load_object(config, "verify_heater %s" % (short_name,))
         self.printer.load_object(config, "pid_calibrate")
@@ -314,9 +318,10 @@ class ControlHCU:
         self.Kp = config.getfloat('pid_Kp', minval=0.)
         self.Ki = config.getfloat('pid_Ki', minval=0.)
         self.Kd = config.getfloat('pid_Kd', minval=0.)
-    def setup_hcu_heater(self, hcu_heater, max_power):
+    def setup_hcu_heater(self, hcu_heater, max_power, resonance_frequency):
         hcu_heater.setup_pid(self.Kp, self.Ki, self.Kd)
         hcu_heater.setup_current_limit(max_power)
+        hcu_heater.setup_resonance_frequency(resonance_frequency)
     def temperature_update(self, read_time, temp, target_temp):
         self.heater.hcu_heater.register_write(read_time, target_temp)
     def check_busy(self, eventtime, smoothed_temp, target_temp):
