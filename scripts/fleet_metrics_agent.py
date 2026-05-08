@@ -462,7 +462,10 @@ class FleetMetricsAgent:
         if self.info or self.status:
             heartbeat = build_heartbeat(
                 self.config, self.info, self.status, self.queue.count())
-            self.uploader.upload_heartbeat(heartbeat)
+            try:
+                self.uploader.upload_heartbeat(heartbeat)
+            except (IOError, OSError, urlerror.URLError, ValueError) as e:
+                logging.warning("fleet heartbeat upload failed: %s", e)
         batch = self.queue.pending_batch(self.config.upload_batch_size)
         if not batch:
             return
@@ -472,7 +475,8 @@ class FleetMetricsAgent:
             self.uploader.upload_events(self.config.printer_id, events)
         except (IOError, OSError, urlerror.URLError, ValueError) as e:
             self.queue.mark_failed(row_ids, e)
-            raise
+            logging.warning("fleet event upload failed: %s", e)
+            return
         self.queue.mark_sent(row_ids)
 
 

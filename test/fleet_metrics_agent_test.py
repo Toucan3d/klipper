@@ -164,6 +164,36 @@ class FakeStore:
         self.events.extend(events)
 
 
+class FailingUploader:
+    def upload_heartbeat(self, heartbeat):
+        raise OSError("backend offline")
+
+    def upload_events(self, printer_id, events):
+        raise OSError("backend offline")
+
+
+class FlushFailureTest(unittest.TestCase):
+    def test_upload_failures_do_not_raise_or_drop_events(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = fleet.FleetConfig(
+                printer_id="printer-a",
+                backend_url="http://pi:8080",
+                auth_token="token",
+                queue_db=os.path.join(td, "queue.sqlite3"))
+            queue = fleet.EventQueue(config.queue_db)
+            queue.enqueue({
+                "event_id": "00000000-0000-0000-0000-000000000002",
+                "kind": "print_finished",
+                "printer_id": "printer-a",
+            })
+            agent = fleet.FleetMetricsAgent(
+                config, queue=queue, uploader=FailingUploader())
+            agent.status["webhooks"] = {"state": "ready"}
+            agent.flush_once()
+            self.assertEqual(queue.count(), 1)
+            queue.close()
+
+
 class BackendTest(unittest.TestCase):
     def setUp(self):
         self.store = FakeStore()
