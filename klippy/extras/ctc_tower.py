@@ -29,6 +29,9 @@ class CTCTower:
         self.gcode.register_command("ABORT_CTC_TOWER",
                                     self.cmd_ABORT_CTC_TOWER,
                                     desc=self.cmd_ABORT_CTC_TOWER_help)
+        self.gcode.register_command("QUERY_CTC_TOWER",
+                                    self.cmd_QUERY_CTC_TOWER,
+                                    desc=self.cmd_QUERY_CTC_TOWER_help)
 
     cmd_CTC_TOWER_help = "Rotate a synchronized extra axis at Z intervals"
     def cmd_CTC_TOWER(self, gcmd):
@@ -74,17 +77,47 @@ class CTCTower:
             pos[self.axis_index] += self.axis_offset
         return pos
 
-    def _update_axis_offset(self, z):
+    def _calc_axis_offset(self, z):
         if z < self.start:
-            return
+            return 0, 0.
         band_index = int(math.floor((z - self.start) / self.height_delta
                                     + 1e-9)) + 1
-        if band_index > self.band_index:
-            self.band_index = band_index
-            if band_index & 1:
-                self.axis_offset = self.angle_delta
-            else:
-                self.axis_offset = 0.
+        if band_index & 1:
+            return band_index, self.angle_delta
+        return band_index, 0.
+
+    cmd_QUERY_CTC_TOWER_help = "Report the current ctc tower state"
+    def cmd_QUERY_CTC_TOWER(self, gcmd):
+        if self.normal_transform is None:
+            gcmd.respond_info("CTC_TOWER is not active")
+            return
+        logical_pos = self.gcode_move.get_status()['position']
+        report_band_index, report_axis_offset = self._calc_axis_offset(
+            logical_pos.z)
+        physical_pos = self.normal_transform.get_position()
+        axis_index = self.axis_index
+        transform_at_head = self.gcode_move.move_transform is self
+        if (axis_index is None or axis_index >= len(logical_pos)
+            or axis_index >= len(physical_pos)):
+            gcmd.respond_info(
+                "CTC_TOWER active transform_at_head=%d"
+                " axis=%s z=%.6f band=%d offset=%.6f"
+                " axis_position=unavailable"
+                % (transform_at_head, self.axis, logical_pos.z,
+                   report_band_index, report_axis_offset))
+            return
+        logical_axis = logical_pos[axis_index]
+        physical_axis = physical_pos[axis_index]
+        gcmd.respond_info(
+            "CTC_TOWER active transform_at_head=%d"
+            " axis=%s z=%.6f band=%d offset=%.6f"
+            " logical_%s=%.6f toolhead_%s=%.6f"
+            % (transform_at_head, self.axis, logical_pos.z,
+               report_band_index, report_axis_offset, self.axis,
+               logical_axis, self.axis, physical_axis))
+
+    def _update_axis_offset(self, z):
+        self.band_index, self.axis_offset = self._calc_axis_offset(z)
 
     def move(self, newpos, speed):
         normal_transform = self.normal_transform

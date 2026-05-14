@@ -1692,6 +1692,11 @@ the offset between `0` and `angle_delta`.
 #### ABORT_CTC_TOWER
 `ABORT_CTC_TOWER`: Stops the active `CTC_TOWER` move transform.
 
+#### QUERY_CTC_TOWER
+`QUERY_CTC_TOWER`: Reports whether `CTC_TOWER` is active and, if so,
+the current band, active offset, logical axis position, and downstream
+toolhead axis position.
+
 ### [virtual_sdcard]
 
 Klipper supports the following standard G-Code commands if the
