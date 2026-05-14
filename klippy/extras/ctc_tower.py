@@ -4,8 +4,6 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-CANCEL_Z_DELTA = 2.0
-
 
 class CTCTower:
     def __init__(self, config):
@@ -26,6 +24,9 @@ class CTCTower:
         self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_command("CTC_TOWER", self.cmd_CTC_TOWER,
                                     desc=self.cmd_CTC_TOWER_help)
+        self.gcode.register_command("ABORT_CTC_TOWER",
+                                    self.cmd_ABORT_CTC_TOWER,
+                                    desc=self.cmd_ABORT_CTC_TOWER_help)
 
     cmd_CTC_TOWER_help = "Rotate a synchronized extra axis at Z intervals"
     def cmd_CTC_TOWER(self, gcmd):
@@ -51,6 +52,13 @@ class CTCTower:
         gcmd.respond_info(
             "Starting ctc tower test (" + " ".join(message_parts) + ")")
 
+    cmd_ABORT_CTC_TOWER_help = "Stop the active ctc tower test"
+    def cmd_ABORT_CTC_TOWER(self, gcmd):
+        if self.normal_transform is None:
+            gcmd.respond_info("CTC_TOWER is not active")
+            return
+        self.end_test()
+
     def get_position(self):
         pos = list(self.normal_transform.get_position())
         if self.axis_index is not None and self.axis_index < len(pos):
@@ -72,11 +80,6 @@ class CTCTower:
             return
         z = newpos[2]
         axis_moving = newpos[axis_index] != self.last_position[axis_index]
-        if z < self.last_z - CANCEL_Z_DELTA:
-            self.end_test()
-            self.last_position[:] = newpos
-            normal_transform.move(newpos, speed)
-            return
         if (z >= self.start and axis_moving
             and z >= self.last_z + self.height_delta):
             self.axis_offset = self.angle_delta

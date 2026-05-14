@@ -1690,6 +1690,9 @@ tracked axis moves at a qualifying Z height, and subsequent moves keep
 that offset active. Additional qualifying updates are limited to moves
 separated by at least `LAYER_DELTA` in Z.
 
+#### ABORT_CTC_TOWER
+`ABORT_CTC_TOWER`: Stops the active `CTC_TOWER` move transform.
+
 ### [virtual_sdcard]
 
 Klipper supports the following standard G-Code commands if the
