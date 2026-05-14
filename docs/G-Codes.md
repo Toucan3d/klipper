@@ -1684,11 +1684,10 @@ The following command is available when the
 
 #### CTC_TOWER
 `CTC_TOWER START=<z_height> LAYER_DELTA=<height>`: Enables a move
-transform that adds the configured `angle_delta` to the configured
-extra axis after `START` is reached. The offset is applied when the
-tracked axis moves at a qualifying Z height, and subsequent moves keep
-that offset active. Additional qualifying updates are limited to moves
-separated by at least `LAYER_DELTA` in Z.
+transform that alternates the configured extra axis between no offset
+and the configured `angle_delta`. The first band begins at `START`
+and applies `angle_delta`; each additional `LAYER_DELTA` in Z toggles
+the offset between `0` and `angle_delta`.
 
 #### ABORT_CTC_TOWER
 `ABORT_CTC_TOWER`: Stops the active `CTC_TOWER` move transform.
