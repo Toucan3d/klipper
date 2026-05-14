@@ -3,7 +3,6 @@
 # Copyright (C) 2026
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import math
 
 
 # PEP 485 isclose()
@@ -15,20 +14,26 @@ def lerp(t, v0, v1):
     return (1. - t) * v0 + t * v1
 
 
+def eval_poly(coefficients, axis_pos):
+    axis_pos = axis_pos % 360.
+    result = 0.
+    for coefficient in reversed(coefficients):
+        result = result * axis_pos + coefficient
+    return result
+
+
 class MoveSplitter:
-    def __init__(self, config, deflection_angle, deflection_radius,
+    def __init__(self, config, x_polynomial, y_polynomial,
                  move_check_distance_axis):
-        self.deflection_angle = deflection_angle
-        self.deflection_radius = deflection_radius
+        self.x_polynomial = x_polynomial
+        self.y_polynomial = y_polynomial
         self.split_delta_xy = config.getfloat('split_delta_xy', .025,
                                               minval=0.01)
         self.move_check_distance_axis = move_check_distance_axis
 
     def calc_xy_adjust(self, axis_pos):
-        calc_deflection_angle = math.radians(axis_pos + self.deflection_angle)
-        x_adj = self.deflection_radius * math.cos(calc_deflection_angle)
-        y_adj = self.deflection_radius * math.sin(calc_deflection_angle)
-        return x_adj, y_adj
+        return (eval_poly(self.x_polynomial, axis_pos),
+                eval_poly(self.y_polynomial, axis_pos))
 
     def _apply_xy_adjust(self, pos, axis_index):
         transformed = list(pos)
@@ -65,7 +70,7 @@ class MoveSplitter:
         yield self._apply_xy_adjust(next_pos, axis_index)
 
 
-class ConcentricityToleranceCompensation:
+class CTC:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.gcode_move = self.printer.load_object(config, 'gcode_move')
@@ -88,10 +93,11 @@ class ConcentricityToleranceCompensation:
             move_check_distance_axis = legacy_move_check_distance
         if move_check_distance_axis is None:
             move_check_distance_axis = 5.
-        self.deflection_angle = config.getfloat('deflection_angle', 0.)
-        self.deflection_radius = config.getfloat('deflection_radius', 0.)
-        self.splitter = MoveSplitter(config, self.deflection_angle,
-                                     self.deflection_radius,
+        self.x_polynomial = config.getfloatlist('x_polynomial', ())
+        self.y_polynomial = config.getfloatlist('y_polynomial', ())
+        self.is_active = self._has_compensation()
+        self.splitter = MoveSplitter(config, self.x_polynomial,
+                                     self.y_polynomial,
                                      move_check_distance_axis)
         self.next_transform = None
         self.printer.register_event_handler("klippy:connect",
@@ -107,9 +113,13 @@ class ConcentricityToleranceCompensation:
             return None
         return axis_index
 
+    def _has_compensation(self):
+        coefficients = self.x_polynomial + self.y_polynomial
+        return any([c != 0. for c in coefficients])
+
     def get_position(self):
         pos = list(self.next_transform.get_position())
-        if not self.deflection_radius:
+        if not self.is_active:
             return pos
         axis_index = self._get_axis_index(pos)
         if axis_index is None:
@@ -121,7 +131,7 @@ class ConcentricityToleranceCompensation:
 
     def move(self, newpos, speed):
         newpos = list(newpos)
-        if not self.deflection_radius:
+        if not self.is_active:
             self.next_transform.move(newpos, speed)
             return
         axis_index = self._get_axis_index(newpos)
@@ -135,4 +145,4 @@ class ConcentricityToleranceCompensation:
 
 
 def load_config(config):
-    return ConcentricityToleranceCompensation(config)
+    return CTC(config)
