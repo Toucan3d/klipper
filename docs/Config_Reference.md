@@ -1439,6 +1439,23 @@ applies an XY offset derived from that axis position.
 #   Legacy alias for move_check_distance_axis.
 ```
 
+### [ctc_tower]
+
+Rotate a synchronized extra axis by a fixed angle offset after a
+configured Z height. The module tracks a configured G-Code axis letter
+and is controlled with the `CTC_TOWER` command.
+
+```
+[ctc_tower]
+#axis: A
+#   G-Code axis letter of the synchronized extra axis to rotate. This
+#   must be a single extra axis letter, and it must match the axis
+#   registered with standard `G1` moves. The default is A.
+#angle_delta: 180.0
+#   Angle, in degrees, added to the tracked axis once the tower is
+#   active at the requested Z height. The default is 180.0.
+```
+
 ### [z_thermal_adjust]
 
 Temperature-dependant toolhead Z position adjustment. Compensate for vertical

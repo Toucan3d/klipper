@@ -1677,6 +1677,19 @@ three possible combinations of options:
   You can simply count bands or read tuning tower labels to determine
   the optimum value.
 
+### [ctc_tower]
+
+The following command is available when the
+[ctc_tower config section](Config_Reference.md#ctc_tower) is enabled.
+
+#### CTC_TOWER
+`CTC_TOWER START=<z_height> LAYER_DELTA=<height>`: Enables a move
+transform that adds the configured `angle_delta` to the configured
+extra axis after `START` is reached. The offset is applied when the
+tracked axis moves at a qualifying Z height, and subsequent moves keep
+that offset active. Additional qualifying updates are limited to moves
+separated by at least `LAYER_DELTA` in Z.
+
 ### [virtual_sdcard]
 
 Klipper supports the following standard G-Code commands if the
