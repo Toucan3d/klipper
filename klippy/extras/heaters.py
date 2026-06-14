@@ -30,8 +30,6 @@ class Heater:
         self.sensor.setup_minmax(self.min_temp, self.max_temp)
         self.sensor.setup_callback(self.temperature_callback)
         self.pwm_delay = self.sensor.get_report_time_delta()
-        if hasattr(self.sensor, "setup_pwm_callback"):
-            self.sensor.setup_pwm_callback(self.pwm_callback)
         # Setup temperature checks
         self.min_extrude_temp = config.getfloat(
             'min_extrude_temp', 170.,
@@ -40,16 +38,8 @@ class Heater:
                          is not None)
         self.can_extrude = self.min_extrude_temp <= 0. or is_fileoutput
         heater_pin = config.get('heater_pin')
-        if heater_pin == "induction":
-            self.max_power = 1.
-            self.hcu_max_power = config.getfloat('max_power', above=0.)
-            self.hcu_resonance_frequency = config.getint(
-                'resonance_frequency', 100000, minval=100000, maxval=250000)
-        else:
-            self.max_power = config.getfloat('max_power', 1., above=0.,
-                                             maxval=1.)
-            self.hcu_max_power = None
-            self.hcu_resonance_frequency = None
+        self.max_power = config.getfloat('max_power', 1., above=0.,
+                                         maxval=1.)
         self.min_pwm_change = self.max_power * MIN_PWM_CHANGE_RATIO
         self.smooth_time = config.getfloat('smooth_time', 1., above=0.)
         self.inv_smooth_time = 1. / self.smooth_time
@@ -61,34 +51,16 @@ class Heater:
         self.next_pwm_time = 0.
         self.last_pwm_value = 0.
         # Setup control algorithm sub-class
-        algos = {'watermark': ControlBangBang, 'pid': ControlPID,
-                 'hcu': ControlHCU}
+        algos = {'watermark': ControlBangBang, 'pid': ControlPID}
         algo = config.getchoice('control', algos)
         self.control = algo(self, config)
         # Setup output heater pin
-        self.hcu_heater = None
-        if heater_pin != "induction":
-            ppins = self.printer.lookup_object('pins')
-            self.mcu_pwm = ppins.setup_pin('pwm', heater_pin)
-            pwm_cycle_time = config.getfloat('pwm_cycle_time', 0.100, above=0.,
-                                             maxval=self.pwm_delay)
-            self.mcu_pwm.setup_cycle_time(pwm_cycle_time)
-            self.mcu_pwm.setup_max_duration(MAX_HEAT_TIME)
-        else:
-            self.mcu_pwm = None
-            self.hcu_heater = self.printer.lookup_object(
-                "mcu hcu").setup_register(0x4018)
-        if self.hcu_heater is None and isinstance(self.control, ControlHCU):
-            raise config.error("Heater control 'hcu' requires"
-                               " heater_pin 'induction'")
-        if self.hcu_heater is not None and not isinstance(
-                self.control, ControlHCU):
-            raise config.error("Heater pin 'induction' requires"
-                               " control 'hcu'")
-        if self.hcu_heater is not None:
-            self.control.setup_hcu_heater(
-                self.hcu_heater, self.hcu_max_power,
-                self.hcu_resonance_frequency)
+        ppins = self.printer.lookup_object('pins')
+        self.mcu_pwm = ppins.setup_pin('pwm', heater_pin)
+        pwm_cycle_time = config.getfloat('pwm_cycle_time', 0.100, above=0.,
+                                         maxval=self.pwm_delay)
+        self.mcu_pwm.setup_cycle_time(pwm_cycle_time)
+        self.mcu_pwm.setup_max_duration(MAX_HEAT_TIME)
         # Load additional modules
         self.printer.load_object(config, "verify_heater %s" % (short_name,))
         self.printer.load_object(config, "pid_calibrate")
@@ -96,15 +68,6 @@ class Heater:
         gcode.register_mux_command("SET_HEATER_TEMPERATURE", "HEATER",
                                    short_name, self.cmd_SET_HEATER_TEMPERATURE,
                                    desc=self.cmd_SET_HEATER_TEMPERATURE_help)
-        if self.hcu_heater is not None:
-            gcode.register_mux_command(
-                "MEASURE_RESONANCE_FREQUENCY", "HEATER", short_name,
-                self.cmd_MEASURE_RESONANCE_FREQUENCY,
-                desc=self.cmd_MEASURE_RESONANCE_FREQUENCY_help)
-            gcode.register_mux_command(
-                "SET_HEATER_CURRENT_LIMIT", "HEATER", short_name,
-                self.cmd_SET_HEATER_CURRENT_LIMIT,
-                desc=self.cmd_SET_HEATER_CURRENT_LIMIT_help)
         self.printer.register_event_handler("klippy:shutdown",
                                             self._handle_shutdown)
     def set_pwm(self, read_time, value):
@@ -118,9 +81,6 @@ class Heater:
         self.next_pwm_time = (pwm_time + MAX_HEAT_TIME
                               - (3. * self.pwm_delay + 0.001))
         self.last_pwm_value = value
-        if self.hcu_heater is not None:
-            self.hcu_heater.set_pwm(pwm_time, value)
-            return
         self.mcu_pwm.set_pwm(pwm_time, value)
         #logging.debug("%s: pwm=%.3f@%.3f (from %.3f@%.3f [%.3f])",
         #              self.name, value, pwm_time,
@@ -136,16 +96,11 @@ class Heater:
             self.smoothed_temp += temp_diff * adj_time
             self.can_extrude = (self.smoothed_temp >= self.min_extrude_temp)
         #logging.debug("temp: %.3f %f = %f", read_time, temp)
-    def pwm_callback(self, read_time, duty_cycle):
-        with self.lock:
-            self.last_pwm_value = duty_cycle
     def _handle_shutdown(self):
         self.verify_mainthread_time = -999.
     # External commands
     def get_name(self):
         return self.name
-    def is_hcu(self):
-        return self.hcu_heater is not None
     def get_pwm_delay(self):
         return self.pwm_delay
     def get_max_power(self):
@@ -160,12 +115,8 @@ class Heater:
         with self.lock:
             self.target_temp = degrees
     def get_temp(self, eventtime):
-        if self.hcu_heater is not None:
-            est_print_time = self.hcu_heater.get_mcu().estimated_print_time(
-                eventtime)
-        else:
-            est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
-                eventtime)
+        est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
+            eventtime)
         quell_time = est_print_time - QUELL_STALE_TIME
         with self.lock:
             if self.last_temp_time < quell_time:
@@ -186,12 +137,8 @@ class Heater:
             target_temp = max(self.min_temp, min(self.max_temp, target_temp))
         self.target_temp = target_temp
     def stats(self, eventtime):
-        if self.hcu_heater is not None:
-            est_print_time = self.hcu_heater.get_mcu().estimated_print_time(
-                eventtime)
-        else:
-            est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
-                eventtime)
+        est_print_time = self.mcu_pwm.get_mcu().estimated_print_time(
+            eventtime)
         if not self.printer.is_shutdown():
             self.verify_mainthread_time = est_print_time + MAX_MAINTHREAD_TIME
         with self.lock:
@@ -213,24 +160,6 @@ class Heater:
         temp = gcmd.get_float('TARGET', 0.)
         pheaters = self.printer.lookup_object('heaters')
         pheaters.set_temperature(self, temp)
-    cmd_MEASURE_RESONANCE_FREQUENCY_help = (
-        "Run the HCU resonance sweep and report the optimal frequency")
-    def cmd_MEASURE_RESONANCE_FREQUENCY(self, gcmd):
-        timeout = gcmd.get_float('TIMEOUT', 30., above=0.)
-        with self.lock:
-            self.target_temp = 0.
-        frequency = self.hcu_heater.measure_resonance(timeout)
-        gcmd.respond_info("Heater %s resonance frequency: %d Hz"
-                          % (self.short_name, frequency))
-    cmd_SET_HEATER_CURRENT_LIMIT_help = (
-        "Set the HCU heater current limit in amps")
-    def cmd_SET_HEATER_CURRENT_LIMIT(self, gcmd):
-        current_limit = gcmd.get_float('CURRENT', minval=0.)
-        self.hcu_heater.set_current_limit(current_limit)
-        gcmd.respond_info("Heater %s current limit set to %.3f A"
-                          % (self.short_name, current_limit))
-
-
 ######################################################################
 # Bang-bang control algo
 ######################################################################
@@ -305,27 +234,6 @@ class ControlPID:
         temp_diff = target_temp - smoothed_temp
         return (abs(temp_diff) > PID_SETTLE_DELTA
                 or abs(self.prev_temp_deriv) > PID_SETTLE_SLOPE)
-
-
-######################################################################
-# HCU control
-######################################################################
-
-class ControlHCU:
-    def __init__(self, heater, config):
-        self.heater = heater
-        self.max_delta = config.getfloat('max_delta', 2.0, above=0.)
-        self.Kp = config.getfloat('pid_Kp', minval=0.)
-        self.Ki = config.getfloat('pid_Ki', minval=0.)
-        self.Kd = config.getfloat('pid_Kd', minval=0.)
-    def setup_hcu_heater(self, hcu_heater, max_power, resonance_frequency):
-        hcu_heater.setup_pid(self.Kp, self.Ki, self.Kd)
-        hcu_heater.setup_current_limit(max_power)
-        hcu_heater.setup_resonance_frequency(resonance_frequency)
-    def temperature_update(self, read_time, temp, target_temp):
-        self.heater.hcu_heater.register_write(read_time, target_temp)
-    def check_busy(self, eventtime, smoothed_temp, target_temp):
-        return smoothed_temp < target_temp-self.max_delta
 
 
 ######################################################################
