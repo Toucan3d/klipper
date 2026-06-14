@@ -17,6 +17,7 @@ class InductionHeater:
         self.set_frequency_cmd = None
         self.measure_resonance_cmd = None
         self.pending_results = {}
+        self.resonance_responses = []
         self.mcu.register_config_callback(self._build_config)
 
         gcode = self.printer.lookup_object('gcode')
@@ -41,9 +42,11 @@ class InductionHeater:
             cq=self.cmd_queue)
         self.measure_resonance_cmd = self.mcu.lookup_command(
             'induction_measure_resonance oid=%c', cq=self.cmd_queue)
-        self.mcu.register_serial_response(
-            self._handle_resonance_result,
-            'induction_resonance_result oid=%c value=%u')
+        for oid in (0, 1):
+            self.resonance_responses.append(
+                self.mcu.register_serial_response(
+                    self._handle_resonance_result,
+                    'induction_resonance_result oid=%c value=%u', oid))
 
     def _check_ready(self):
         if self.set_current_limit_cmd is None:
