@@ -971,9 +971,6 @@ heater_pin:
 #   allow the pin to be enabled for no more than half the time. This
 #   setting may be used to limit the total power output (over extended
 #   periods) to the heater. The default is 1.0.
-#resonance_frequency: 100000
-#   The HCU induction heater resonance frequency in Hz. This setting is
-#   only used when heater_pin is "induction". The default is 100000 Hz.
 sensor_type:
 #   Type of sensor - common thermistors are "EPCOS 100K B57560G104F",
 #   "ATC Semitec 104GT-2", "ATC Semitec 104NT-4-R025H42G", "Generic
@@ -1017,6 +1014,12 @@ pid_Kd:
 #   not recommended to set this unless there is an electrical
 #   requirement to switch the heater faster than 10 times a second.
 #   The default is 0.100 seconds.
+#hardware_pwm: False
+#   Use a hardware PWM output for the heater. This is normally not
+#   needed for resistive heaters. I4C induction heaters on INDUCTION0
+#   or INDUCTION1 must use hardware PWM. When using an induction heater,
+#   set pwm_cycle_time to the desired bridge switching period. For
+#   example, 0.000007692 selects approximately 130 kHz.
 #min_extrude_temp: 170
 #   The minimum temperature (in Celsius) at which extruder move
 #   commands may be issued. The default is 170 Celsius.
@@ -2859,6 +2862,54 @@ temperature sensors that are reported via the M105 command.
 #   See the "heater_generic" section for the definition of this
 #   parameter.
 ```
+
+### [induction_heater]
+
+I4C induction heater support. Normal heater temperature control remains
+in the standard `[extruder]` or `[heater_generic]` section using
+`control: pid` or `control: watermark`. The induction firmware exposes
+the bridge outputs as hardware PWM pins named `INDUCTION0` and
+`INDUCTION1`.
+
+Use this section only to enable the I4C-specific G-Code commands for
+shared input current limiting and resonance tuning.
+
+```
+[induction_heater]
+#mcu: mcu
+#   The MCU that provides the induction firmware commands. Use this when
+#   the induction controller is not the primary MCU, for example `hcu`.
+#   The default is mcu.
+```
+
+Example single-zone induction extruder:
+
+```
+[extruder]
+heater_pin: hcu:INDUCTION0
+sensor_type: MAX31856
+sensor_pin: hcu:RC11
+spi_bus: spi3
+control: pid
+pid_Kp: 49.318
+pid_Ki: 10.383
+pid_Kd: 58.565
+pwm_cycle_time: 0.000007692
+hardware_pwm: True
+max_power: 1.0
+min_temp: 0
+max_temp: 290
+```
+
+`pwm_cycle_time` selects the induction switching period. For example,
+0.000007692 is approximately 130 kHz. The host `max_power` setting is a
+normal Klipper power limit from 0.0 to 1.0; it is not the input current
+limit. The firmware clamps bridge duty to its hardware-safe maximum and
+applies a shared input current limit. The default shared input current
+limit is 4 A.
+
+Do not configure the same MAX31856 chip both as a heater sensor and as a
+separate `[temperature_sensor]`.
 
 ### [temperature_probe]
 

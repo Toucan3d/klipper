@@ -822,6 +822,37 @@ above the supplied MINIMUM and/or at or below the supplied MAXIMUM.
 [TARGET=<target_temperature>]`: Sets the target temperature for a
 heater. If a target temperature is not supplied, the target is 0.
 
+### [induction_heater]
+
+The following commands are available when the
+[induction_heater config section](Config_Reference.md#induction_heater)
+is enabled. Temperature control for induction heaters still uses normal
+Klipper heater commands such as `SET_HEATER_TEMPERATURE` and
+`PID_CALIBRATE`.
+
+#### SET_INDUCTION_CURRENT_LIMIT
+`SET_INDUCTION_CURRENT_LIMIT CURRENT=<amps>`: Set the shared input
+current limit for all active induction zones. The firmware default is
+4 A. A value of 0 disables current limiting.
+
+#### SET_INDUCTION_RESONANCE_FREQUENCY
+`SET_INDUCTION_RESONANCE_FREQUENCY HEATER=<heater_name>
+FREQUENCY=<hz>`: Set the induction switching frequency for the channel
+used by the named heater.
+
+`SET_INDUCTION_RESONANCE_FREQUENCY CHANNEL=<0|1> FREQUENCY=<hz>`:
+Set the induction switching frequency by channel number. Channel 0 is
+`INDUCTION0`; channel 1 is `INDUCTION1`.
+
+#### MEASURE_INDUCTION_RESONANCE
+`MEASURE_INDUCTION_RESONANCE HEATER=<heater_name> [TIMEOUT=<seconds>]`:
+Run the firmware resonance sweep on the channel used by the named
+heater and report the measured best frequency.
+
+`MEASURE_INDUCTION_RESONANCE CHANNEL=<0|1> [TIMEOUT=<seconds>]`:
+Run the firmware resonance sweep by channel number. Channel 0 is
+`INDUCTION0`; channel 1 is `INDUCTION1`.
+
 ### [idle_timeout]
 
 The idle_timeout module is automatically loaded.
