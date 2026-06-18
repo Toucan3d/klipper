@@ -1410,7 +1410,15 @@ the nature of skew correction these lengths are set via gcode. See
 
 Adjust XY moves to compensate for concentricity error on a synchronized
 extra axis. The module tracks a configured G-Code axis letter and
-applies an XY offset derived from that axis position.
+applies an XY offset derived from that axis position. The offset is read
+from a lookup table whose support points are placed at the angles given
+in `lookup_a`; the points may be spaced non-uniformly. All angles are
+taken modulo 360, so the table describes a single revolution and the same
+compensation repeats every full turn (e.g. 720 == 360 == 0). By default
+the value is linearly interpolated between the two neighboring support
+points (wrapping across the 360 -> 0 boundary); with `interpolate: False`
+the axis position is instead snapped to the nearest support point and
+exactly its value is used (no interpolation or smoothing across angles).
 
 ```
 [ctc]
@@ -1418,23 +1426,33 @@ applies an XY offset derived from that axis position.
 #   G-Code axis letter of the synchronized extra axis to track. This
 #   must be a single extra axis letter, and it must match the axis
 #   registered with standard `G1` moves. The default is A.
-#x_polynomial:
-#   Polynomial coefficients for the X compensation, in mm, evaluated
-#   from the configured axis position modulo 360 degrees. Coefficients
-#   are specified in ascending order as c0, c1, c2, and so on for
-#   c0 + c1*a + c2*a^2. The default is no X compensation.
-#y_polynomial:
-#   Polynomial coefficients for the Y compensation, in mm, evaluated
-#   from the configured axis position modulo 360 degrees. Coefficients
-#   are specified in ascending order as c0, c1, c2, and so on for
-#   c0 + c1*a + c2*a^2. The default is no Y compensation.
+#lookup_a:
+#   List of the angle support points, in degrees, one per table entry.
+#   The angles need not be uniformly spaced, but each must be distinct
+#   (modulo 360). The order does not matter; entries are sorted by angle
+#   internally. If omitted, the lookup_dx/lookup_dy entries are assumed to
+#   lie on a uniform 0..360 grid (i * 360 / count). The default is none.
+#lookup_dx:
+#   Lookup table of the measured runout in X, in mm, one value per
+#   support point in lookup_a. The applied X compensation is the opposite
+#   of this value (-dx). The default is no X compensation.
+#lookup_dy:
+#   Lookup table of the measured runout in Y, in mm. The applied Y
+#   compensation is -dy. It must have the same number of entries as
+#   lookup_a/lookup_dx. The default is no Y compensation.
+#interpolate: True
+#   When True, linearly interpolate the compensation between the two
+#   neighboring support points (wrapping across the 360 -> 0 boundary).
+#   When False, snap to the nearest support point by angular distance,
+#   with no interpolation. The default is True.
 #split_delta_xy: 0.025
 #   Minimum change in the computed XY compensation before a move is
 #   subdivided. The default is 0.025mm.
-#move_check_distance_axis: 5.0
+#move_check_distance_axis:
 #   Distance, in the configured axis units, between checks for a change
-#   in compensation while the tracked axis is moving. The default is
-#   5.0.
+#   in compensation while the tracked axis is moving. The default is the
+#   smallest gap between neighboring support points so every support point
+#   along a sweeping move is sampled, or 5.0 when no table is configured.
 #move_check_distance_a:
 #   Legacy alias for move_check_distance_axis.
 ```
