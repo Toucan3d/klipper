@@ -654,6 +654,7 @@ class HCU_register:
         self._mcu = mcu
         self._oid = None
         self._last_clock = 0
+        self._temp_set_cmd = None
         self._address = address
         self._sample_time = self._report_time = 0.1
         self._callback = None
@@ -670,6 +671,9 @@ class HCU_register:
     def get_mcu(self):
         return self._mcu
     def register_write(self, print_time, value):
+        if self._temp_set_cmd is None:
+            raise self._mcu.get_printer().command_error(
+                "Register writes are not available on this register")
         clock = self._mcu.print_time_to_clock(print_time)
         self._temp_set_cmd.send([int(value * 10), clock],
                                 minclock=self._last_clock, reqclock=clock)
@@ -721,7 +725,6 @@ class HCU_register:
         self._last_clock = clock
     def _build_config(self):
         self._oid = self._mcu.create_oid()
-        cmd_queue = self._mcu.alloc_command_queue()
         self._mcu.add_config_cmd("config_hcu oid=%d addr=%d" % (
             self._oid, self._address))
         clock = self._mcu.get_query_slot(self._oid)
@@ -733,42 +736,6 @@ class HCU_register:
         self._mcu.register_serial_response(
             self._handle_hcu_stats,
             "hcu_value oid=%c next_clock=%u value=%hu", self._oid)
-        self._temp_set_cmd = self._mcu.lookup_command(
-            "hotend_set_temperature value=%u clock=%u", cq=cmd_queue)
-        if self._address == 0x4018:
-            self._resonance_cmd = self._mcu.lookup_command(
-                "hotend_measure_resonance", cq=cmd_queue)
-            self._current_limit_cmd = self._mcu.lookup_command(
-                "hotend_set_current_limit value=%u", cq=cmd_queue)
-            self._pwm_set_cmd = self._mcu.lookup_command(
-                "hotend_set_pwm value=%u clock=%u", cq=cmd_queue)
-            self._pid_set_cmd = self._mcu.lookup_command(
-                "hotend_set_pid kp=%u ki=%u kd=%u", cq=cmd_queue)
-            self._resonance_frequency_cmd = self._mcu.lookup_command(
-                "hotend_set_resonance_frequency value=%u", cq=cmd_queue)
-            if self._pid_config is not None:
-                kp, ki, kd = self._pid_config
-                self._mcu.add_config_cmd(
-                    "hotend_set_pid kp=%d ki=%d kd=%d" % (
-                        int(round(kp * 1000.)),
-                        int(round(ki * 1000.)),
-                        int(round(kd * 1000.))), is_init=True)
-            if self._current_limit_config is not None:
-                current_limit_ma = int(round(
-                    self._current_limit_config * 1000.))
-                if current_limit_ma < 0:
-                    current_limit_ma = 0
-                self._mcu.add_config_cmd(
-                    "hotend_set_current_limit value=%d" % (
-                        current_limit_ma,), is_init=True)
-            if self._resonance_frequency_config is not None:
-                self._mcu.add_config_cmd(
-                    "hotend_set_resonance_frequency value=%d" % (
-                        int(self._resonance_frequency_config),),
-                    is_init=True)
-            self._mcu.register_serial_response(
-                self._handle_resonance_result,
-                "hotend_resonance_result value=%u")
     def _handle_hcu_stats(self, params):
         last_value = params['value']
         next_clock = self._mcu.clock32_to_clock64(params['next_clock'])

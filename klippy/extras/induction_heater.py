@@ -1,8 +1,8 @@
-# Optional I4C induction heater commands.
+# Optional induction heater support commands.
 #
-# This module intentionally stays outside the normal heater PID path.  Use
+# This module intentionally stays outside the normal heater PID path. Use
 # standard Klipper heaters with heater_pin set to INDUCTION0/INDUCTION1, and
-# load this extra only for I4C-specific current-limit and resonance commands.
+# load this extra only for board-specific current-limit and resonance commands.
 
 import mcu
 
@@ -11,7 +11,11 @@ class InductionHeater:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
-        self.mcu = mcu.get_printer_mcu(self.printer, config.get('mcu', 'mcu'))
+        mcu_name = config.get('mcu', 'mcu')
+        self.mcu = mcu.get_printer_mcu(self.printer, mcu_name)
+        default_channels = 1 if mcu_name == 'hcu' else 2
+        self.channel_count = config.getint(
+            'channels', default_channels, minval=1, maxval=2)
         self.cmd_queue = self.mcu.alloc_command_queue()
         self.set_current_limit_cmd = None
         self.set_frequency_cmd = None
@@ -42,7 +46,7 @@ class InductionHeater:
             cq=self.cmd_queue)
         self.measure_resonance_cmd = self.mcu.lookup_command(
             'induction_measure_resonance oid=%c', cq=self.cmd_queue)
-        for oid in (0, 1):
+        for oid in range(self.channel_count):
             self.resonance_responses.append(
                 self.mcu.register_serial_response(
                     self._handle_resonance_result,
@@ -53,6 +57,9 @@ class InductionHeater:
             raise self.printer.command_error(
                 "Induction MCU commands are not available yet")
 
+    def _channel_names(self):
+        return '/'.join('INDUCTION%d' % (i,) for i in range(self.channel_count))
+
     def _handle_resonance_result(self, params):
         oid = params['oid']
         completion = self.pending_results.pop(oid, None)
@@ -60,7 +67,8 @@ class InductionHeater:
             self.reactor.async_complete(completion, params)
 
     def _channel_from_gcmd(self, gcmd):
-        channel = gcmd.get_int('CHANNEL', None, minval=0, maxval=1)
+        channel = gcmd.get_int(
+            'CHANNEL', None, minval=0, maxval=self.channel_count - 1)
         if channel is not None:
             return channel
 
@@ -73,14 +81,14 @@ class InductionHeater:
             if section_l != heater_l and not section_l.endswith(' ' + heater_l):
                 continue
             heater_pin = values.get('heater_pin', '').upper()
-            if heater_pin.endswith('INDUCTION0'):
-                return 0
-            if heater_pin.endswith('INDUCTION1'):
-                return 1
-        raise gcmd.error("Unable to map heater '%s' to INDUCTION0/1" % (heater,))
+            for channel in range(self.channel_count):
+                if heater_pin.endswith('INDUCTION%d' % (channel,)):
+                    return channel
+        raise gcmd.error("Unable to map heater '%s' to %s"
+                         % (heater, self._channel_names()))
 
     cmd_SET_INDUCTION_CURRENT_LIMIT_help = (
-        "Set the shared I4C induction input current limit in amps")
+        "Set the induction input current limit in amps")
     def cmd_SET_INDUCTION_CURRENT_LIMIT(self, gcmd):
         self._check_ready()
         current = gcmd.get_float('CURRENT', minval=0.)
@@ -88,7 +96,7 @@ class InductionHeater:
         gcmd.respond_info("Induction current limit set to %.3f A" % (current,))
 
     cmd_SET_INDUCTION_RESONANCE_FREQUENCY_help = (
-        "Set an I4C induction channel resonance frequency")
+        "Set an induction channel resonance frequency")
     def cmd_SET_INDUCTION_RESONANCE_FREQUENCY(self, gcmd):
         self._check_ready()
         channel = self._channel_from_gcmd(gcmd)
@@ -99,7 +107,7 @@ class InductionHeater:
             % (channel, frequency))
 
     cmd_MEASURE_INDUCTION_RESONANCE_help = (
-        "Run an I4C induction resonance sweep and report the best frequency")
+        "Run an induction resonance sweep and report the best frequency")
     def cmd_MEASURE_INDUCTION_RESONANCE(self, gcmd):
         self._check_ready()
         channel = self._channel_from_gcmd(gcmd)
