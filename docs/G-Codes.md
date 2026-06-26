@@ -840,18 +840,20 @@ current limit for all active induction zones. The firmware default is
 FREQUENCY=<hz>`: Set the induction switching frequency for the channel
 used by the named heater.
 
-`SET_INDUCTION_RESONANCE_FREQUENCY CHANNEL=<0|1> FREQUENCY=<hz>`:
+`SET_INDUCTION_RESONANCE_FREQUENCY CHANNEL=<number> FREQUENCY=<hz>`:
 Set the induction switching frequency by channel number. Channel 0 is
-`INDUCTION0`; channel 1 is `INDUCTION1`.
+`INDUCTION0` and channel 1 is `INDUCTION1`; channel 1 is only available
+when the `[induction_heater]` `channels` setting is 2.
 
 #### MEASURE_INDUCTION_RESONANCE
 `MEASURE_INDUCTION_RESONANCE HEATER=<heater_name> [TIMEOUT=<seconds>]`:
 Run the firmware resonance sweep on the channel used by the named
 heater and report the measured best frequency.
 
-`MEASURE_INDUCTION_RESONANCE CHANNEL=<0|1> [TIMEOUT=<seconds>]`:
+`MEASURE_INDUCTION_RESONANCE CHANNEL=<number> [TIMEOUT=<seconds>]`:
 Run the firmware resonance sweep by channel number. Channel 0 is
-`INDUCTION0`; channel 1 is `INDUCTION1`.
+`INDUCTION0` and channel 1 is `INDUCTION1`; channel 1 is only available
+when the `[induction_heater]` `channels` setting is 2.
 
 ### [idle_timeout]
 

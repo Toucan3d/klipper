@@ -1016,7 +1016,7 @@ pid_Kd:
 #   The default is 0.100 seconds.
 #hardware_pwm: False
 #   Use a hardware PWM output for the heater. This is normally not
-#   needed for resistive heaters. I4C induction heaters on INDUCTION0
+#   needed for resistive heaters. Induction heaters on INDUCTION0
 #   or INDUCTION1 must use hardware PWM. When using an induction heater,
 #   set pwm_cycle_time to the desired bridge switching period. For
 #   example, 0.000007692 selects approximately 130 kHz.
@@ -2865,14 +2865,14 @@ temperature sensors that are reported via the M105 command.
 
 ### [induction_heater]
 
-I4C induction heater support. Normal heater temperature control remains
+Induction heater support. Normal heater temperature control remains
 in the standard `[extruder]` or `[heater_generic]` section using
 `control: pid` or `control: watermark`. The induction firmware exposes
 the bridge outputs as hardware PWM pins named `INDUCTION0` and
 `INDUCTION1`.
 
-Use this section only to enable the I4C-specific G-Code commands for
-shared input current limiting and resonance tuning.
+Use this section only to enable the board-specific G-Code commands for
+input current limiting and resonance tuning.
 
 ```
 [induction_heater]
@@ -2880,6 +2880,10 @@ shared input current limiting and resonance tuning.
 #   The MCU that provides the induction firmware commands. Use this when
 #   the induction controller is not the primary MCU, for example `hcu`.
 #   The default is mcu.
+#channels:
+#   The number of induction channels exposed by the firmware, either 1
+#   (INDUCTION0 only) or 2 (INDUCTION0 and INDUCTION1). The default is 1
+#   when mcu is "hcu" and 2 otherwise.
 ```
 
 Example single-zone induction extruder:
@@ -3200,6 +3204,44 @@ sensor_type: LM75
 #lm75_report_time:
 #   Interval in seconds between readings. Default is 0.8, with minimum
 #   0.5.
+```
+
+### MLX90614 temperature sensor
+
+MLX90614 two wire interface (I2C) non-contact infrared temperature
+sensor. Because it measures temperature optically it can be used to
+monitor a target without physical contact, including as the sensor for
+an extruder or `[heater_generic]` heater.
+
+```
+sensor_type: MLX90614
+#i2c_address:
+#   Default is 90 (0x5a).
+#i2c_mcu:
+#i2c_bus:
+#i2c_software_scl_pin:
+#i2c_software_sda_pin:
+#i2c_speed:
+#   See the "common I2C settings" section for a description of the
+#   above parameters. The default i2c_speed is 100000.
+#mlx90614_temperature_source: object1
+#   Which sensor reading to report. One of "ambient" (the sensor's own
+#   die temperature), "object1", or "object2" (the infrared object
+#   temperatures). The default is "object1".
+#emissivity: 1.0
+#   Emissivity of the measured surface, from just above 0.0 to 1.0. If
+#   this differs from the value currently stored in the sensor, the new
+#   value is written to the sensor EEPROM during startup. The default
+#   is 1.0.
+#mlx90614_report_time: 0.3
+#   Interval in seconds between readings. The default is 0.3, with a
+#   minimum of 0.1.
+#mlx90614_init_delay: 0.1
+#   Delay in seconds after connect before the sensor is initialized.
+#   This gives the device time to power up. The default is 0.1.
+#mlx90614_pec_retries: 3
+#   Number of times a read is retried when the SMBus packet error check
+#   (PEC) byte does not match before raising an error. The default is 3.
 ```
 
 ### Builtin micro-controller temperature sensor
