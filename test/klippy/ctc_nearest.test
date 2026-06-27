@@ -1,5 +1,5 @@
-# Test case for ctc
-CONFIG ctc.cfg
+# Test case for ctc nearest-neighbor mode (interpolate: False)
+CONFIG ctc_nearest.cfg
 DICTIONARY atmega2560.dict
 
 MANUAL_STEPPER STEPPER=ctc_axis SET_POSITION=0
@@ -7,8 +7,8 @@ MANUAL_STEPPER STEPPER=ctc_axis GCODE_AXIS=A
 G1 X10 Y5 A180
 ASSERT_CTC_ACTIVE
 
-G1 X10 Y5 A135
-ASSERT_CTC_INTERP
+G1 X10 Y5 A170
+ASSERT_CTC_SNAP
 
 MANUAL_STEPPER STEPPER=ctc_axis GCODE_AXIS=
 G1 X6 Y4

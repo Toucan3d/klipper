@@ -1710,6 +1710,30 @@ three possible combinations of options:
   You can simply count bands or read tuning tower labels to determine
   the optimum value.
 
+### [ctc]
+
+The following commands are available when the
+[ctc config section](Config_Reference.md#ctc) is enabled.
+
+#### SET_CTC
+`SET_CTC [LOOKUP_A=<v,v,...>] [LOOKUP_DX=<v,v,...>] [LOOKUP_DY=<v,v,...>]
+[INTERPOLATE=0|1] [INDEX=<i> [A=<value>] [DX=<value>] [DY=<value>]]
+[SPLIT_DELTA_XY=<value>] [MOVE_CHECK_DISTANCE_AXIS=<value>]`: Update the
+lookup table or its parameters at runtime without restarting Klipper
+(handy for tuning). The change is applied immediately but is **not**
+written back to the config file. `LOOKUP_A`/`LOOKUP_DX`/`LOOKUP_DY` are
+comma-separated values with no spaces; pass `LOOKUP_A` whenever you change
+the number of support points (an empty `LOOKUP_DX`/`LOOKUP_DY` clears the
+table and disables compensation). `INDEX` together with `A`, `DX` and/or
+`DY` overrides a single support point in place. `INTERPOLATE` toggles
+linear interpolation versus nearest-neighbor snapping. With no parameters
+the command just reports the current state.
+
+#### QUERY_CTC
+`QUERY_CTC`: Reports the active state, interpolation mode, point count,
+smallest support-point gap, `split_delta_xy`, `move_check_distance_axis`,
+and the current `lookup_a`/`lookup_dx`/`lookup_dy` values.
+
 ### [ctc_tower]
 
 The following command is available when the
