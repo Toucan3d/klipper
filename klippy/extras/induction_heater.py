@@ -7,6 +7,14 @@
 import mcu
 
 
+RESONANCE_START = 100000
+RESONANCE_STOP = 250000
+RESONANCE_STEP = 1000
+RESONANCE_TOLERANCE = 5
+RESONANCE_STABLE_COUNT = 3
+RESONANCE_REPORT_TIME = 0.100
+
+
 class InductionHeater:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -20,7 +28,7 @@ class InductionHeater:
         self.set_current_limit_cmd = None
         self.set_frequency_cmd = None
         self.measure_resonance_cmd = None
-        self.pending_results = {}
+        self.sweep_states = {}
         self.resonance_responses = []
         self.mcu.register_config_callback(self._build_config)
 
@@ -45,12 +53,14 @@ class InductionHeater:
             'induction_set_resonance_frequency oid=%c value=%u',
             cq=self.cmd_queue)
         self.measure_resonance_cmd = self.mcu.lookup_command(
-            'induction_measure_resonance oid=%c', cq=self.cmd_queue)
+            'induction_measure_resonance oid=%c enable=%c',
+            cq=self.cmd_queue)
         for oid in range(self.channel_count):
             self.resonance_responses.append(
                 self.mcu.register_serial_response(
-                    self._handle_resonance_result,
-                    'induction_resonance_result oid=%c value=%u', oid))
+                    self._handle_resonance_power,
+                    'induction_resonance_power oid=%c frequency=%u power=%u',
+                    oid))
 
     def _check_ready(self):
         if self.set_current_limit_cmd is None:
@@ -60,11 +70,29 @@ class InductionHeater:
     def _channel_names(self):
         return '/'.join('INDUCTION%d' % (i,) for i in range(self.channel_count))
 
-    def _handle_resonance_result(self, params):
+    def _handle_resonance_power(self, params):
         oid = params['oid']
-        completion = self.pending_results.pop(oid, None)
+        state = self.sweep_states.get(oid)
+        if state is None or params['frequency'] != state['frequency']:
+            return
+        state['samples'].append(params['power'])
+        stable_count = state['stable_count']
+        if len(state['samples']) < stable_count:
+            return
+        samples = state['samples'][-stable_count:]
+        if max(samples) - min(samples) > state['tolerance']:
+            return
+        completion = state.get('completion')
         if completion is not None:
-            self.reactor.async_complete(completion, params)
+            state['completion'] = None
+            self.reactor.async_complete(
+                completion, (sum(samples) / float(stable_count), samples))
+
+    def _get_sweep_frequencies(self, start, stop, step):
+        frequencies = list(range(start, stop + 1, step))
+        if not frequencies or frequencies[-1] != stop:
+            frequencies.append(stop)
+        return frequencies
 
     def _channel_from_gcmd(self, gcmd):
         channel = gcmd.get_int(
@@ -111,17 +139,59 @@ class InductionHeater:
     def cmd_MEASURE_INDUCTION_RESONANCE(self, gcmd):
         self._check_ready()
         channel = self._channel_from_gcmd(gcmd)
-        timeout = gcmd.get_float('TIMEOUT', 30., above=0.)
-        completion = self.reactor.completion()
-        self.pending_results[channel] = completion
-        self.measure_resonance_cmd.send_wait_ack([channel])
-        result = completion.wait(self.reactor.monotonic() + timeout)
-        if result is None:
-            self.pending_results.pop(channel, None)
-            raise gcmd.error("Timed out waiting for induction resonance result")
+        if channel in self.sweep_states:
+            raise gcmd.error(
+                "Induction channel %d resonance measurement already in progress"
+                % (channel,))
+        start = gcmd.get_int('START', RESONANCE_START, minval=1)
+        stop = gcmd.get_int('STOP', RESONANCE_STOP, minval=1)
+        step = gcmd.get_int('STEP', RESONANCE_STEP, minval=1)
+        tolerance = gcmd.get_int('TOLERANCE', RESONANCE_TOLERANCE, minval=0)
+        stable_count = gcmd.get_int(
+            'STABLE_COUNT', RESONANCE_STABLE_COUNT, minval=1)
+        if stop < start:
+            raise gcmd.error("STOP must be greater than or equal to START")
+        frequencies = self._get_sweep_frequencies(start, stop, step)
+        timeout = gcmd.get_float('TIMEOUT', None, above=0.)
+        if timeout is None:
+            timeout = max(30., (len(frequencies) * stable_count
+                               * RESONANCE_REPORT_TIME * 2.))
+        deadline = self.reactor.monotonic() + timeout
+        state = {
+            'frequency': None, 'samples': [], 'completion': None,
+            'stable_count': stable_count, 'tolerance': tolerance,
+        }
+        self.sweep_states[channel] = state
+        best_frequency = None
+        best_power = None
+        calibration_started = False
+        try:
+            for frequency in frequencies:
+                state['frequency'] = frequency
+                state['samples'] = []
+                state['completion'] = self.reactor.completion()
+                self.set_frequency_cmd.send_wait_ack([channel, frequency])
+                if not calibration_started:
+                    self.measure_resonance_cmd.send_wait_ack([channel, 1])
+                    calibration_started = True
+                result = state['completion'].wait(deadline)
+                if result is None:
+                    raise gcmd.error(
+                        "Timed out waiting for stable induction resonance"
+                        " power at %d Hz" % (frequency,))
+                power, samples = result
+                if best_power is None or power > best_power:
+                    best_power = power
+                    best_frequency = frequency
+            self.set_frequency_cmd.send_wait_ack([channel, best_frequency])
+        finally:
+            state['completion'] = None
+            self.sweep_states.pop(channel, None)
+            if calibration_started:
+                self.measure_resonance_cmd.send_wait_ack([channel, 0])
         gcmd.respond_info(
             "Induction channel %d resonance frequency: %d Hz"
-            % (channel, result['value']))
+            " (power %.3f W)" % (channel, best_frequency, best_power))
 
 
 def load_config(config):

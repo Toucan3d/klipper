@@ -659,13 +659,9 @@ class HCU_register:
         self._sample_time = self._report_time = 0.1
         self._callback = None
         self._last_state = (0, 0.)
-        self._resonance_cmd = None
-        self._resonance_completion = None
-        self._resonance_frequency_cmd = None
         self._current_limit_cmd = None
         self._pid_config = None
         self._current_limit_config = None
-        self._resonance_frequency_config = None
         self._pwm_set_cmd = None
         self._mcu.register_config_callback(self._build_config)
     def get_mcu(self):
@@ -681,25 +677,6 @@ class HCU_register:
     def setup_register_read_callback(self, report_time, callback):
         self._report_time = report_time
         self._callback = callback
-    def measure_resonance(self, timeout=30.):
-        if self._resonance_cmd is None:
-            raise self._mcu.get_printer().command_error(
-                "Resonance measurement is not available on this register")
-        if self._resonance_completion is not None:
-            raise self._mcu.get_printer().command_error(
-                "Resonance measurement already in progress")
-        reactor = self._mcu.get_printer().get_reactor()
-        self._resonance_completion = reactor.completion()
-        try:
-            self._resonance_cmd.send()
-            value = self._resonance_completion.wait(
-                reactor.monotonic() + timeout)
-            if value is None:
-                raise self._mcu.get_printer().command_error(
-                    "Timeout waiting for resonance measurement result")
-            return value
-        finally:
-            self._resonance_completion = None
     def set_current_limit(self, current_limit):
         if self._current_limit_cmd is None:
             raise self._mcu.get_printer().command_error(
@@ -712,8 +689,6 @@ class HCU_register:
         self._pid_config = (kp, ki, kd)
     def setup_current_limit(self, max_power):
         self._current_limit_config = max_power / self.SUPPLY_VOLTAGE
-    def setup_resonance_frequency(self, frequency):
-        self._resonance_frequency_config = frequency
     def set_pwm(self, print_time, value):
         if self._pwm_set_cmd is None:
             raise self._mcu.get_printer().command_error(
@@ -744,10 +719,6 @@ class HCU_register:
         self._last_state = (last_value, last_read_time)
         if self._callback is not None:
             self._callback(last_read_time, last_value)
-    def _handle_resonance_result(self, params):
-        completion = self._resonance_completion
-        if completion is not None:
-            completion.complete(params['value'])
 
 
 ######################################################################

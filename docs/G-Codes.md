@@ -846,14 +846,23 @@ Set the induction switching frequency by channel number. Channel 0 is
 when the `[induction_heater]` `channels` setting is 2.
 
 #### MEASURE_INDUCTION_RESONANCE
-`MEASURE_INDUCTION_RESONANCE HEATER=<heater_name> [TIMEOUT=<seconds>]`:
-Run the firmware resonance sweep on the channel used by the named
-heater and report the measured best frequency.
+`MEASURE_INDUCTION_RESONANCE HEATER=<heater_name> [START=<hz>]
+[STOP=<hz>] [STEP=<hz>] [TOLERANCE=<watts>] [STABLE_COUNT=<count>]
+[TIMEOUT=<seconds>]`: Run a host-controlled resonance sweep on the
+channel used by the named heater and report the measured best
+frequency.
 
-`MEASURE_INDUCTION_RESONANCE CHANNEL=<number> [TIMEOUT=<seconds>]`:
-Run the firmware resonance sweep by channel number. Channel 0 is
-`INDUCTION0` and channel 1 is `INDUCTION1`; channel 1 is only available
-when the `[induction_heater]` `channels` setting is 2.
+`MEASURE_INDUCTION_RESONANCE CHANNEL=<number> [START=<hz>]
+[STOP=<hz>] [STEP=<hz>] [TOLERANCE=<watts>] [STABLE_COUNT=<count>]
+[TIMEOUT=<seconds>]`: Run the resonance sweep by channel number.
+Channel 0 is `INDUCTION0` and channel 1 is `INDUCTION1`; channel 1 is
+only available when the `[induction_heater]` `channels` setting is 2.
+
+The host sends each frequency to the firmware and waits until the last
+`STABLE_COUNT` power reports are within `TOLERANCE` before advancing.
+Defaults are `START=100000`, `STOP=250000`, `STEP=1000`,
+`TOLERANCE=5`, and `STABLE_COUNT=3`. If `TIMEOUT` is omitted, it is
+computed from the sweep length with a minimum of 30 seconds.
 
 ### [idle_timeout]
 
