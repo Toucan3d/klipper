@@ -862,7 +862,8 @@ The host sends each frequency to the firmware and waits until the last
 `STABLE_COUNT` power reports are within `TOLERANCE` before advancing.
 Defaults are `START=100000`, `STOP=250000`, `STEP=1000`,
 `TOLERANCE=5`, and `STABLE_COUNT=3`. If `TIMEOUT` is omitted, it is
-computed from the sweep length with a minimum of 30 seconds.
+computed from the sweep length with a minimum of 30 seconds. Step
+results are written to `/tmp/resonance_result.txt`.
 
 ### [idle_timeout]
 

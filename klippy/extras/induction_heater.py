@@ -13,6 +13,7 @@ RESONANCE_STEP = 1000
 RESONANCE_TOLERANCE = 5
 RESONANCE_STABLE_COUNT = 3
 RESONANCE_REPORT_TIME = 0.100
+RESONANCE_RESULT_FILE = "/tmp/resonance_result.txt"
 
 
 class InductionHeater:
@@ -157,6 +158,12 @@ class InductionHeater:
             timeout = max(30., (len(frequencies) * stable_count
                                * RESONANCE_REPORT_TIME * 2.))
         deadline = self.reactor.monotonic() + timeout
+        log_file = open(RESONANCE_RESULT_FILE, 'w')
+        log_file.write(
+            "channel=%d start=%d stop=%d step=%d tolerance=%d"
+            " stable_count=%d timeout=%.3f\n"
+            % (channel, start, stop, step, tolerance, stable_count, timeout))
+        log_file.flush()
         state = {
             'frequency': None, 'samples': [], 'completion': None,
             'stable_count': stable_count, 'tolerance': tolerance,
@@ -176,19 +183,30 @@ class InductionHeater:
                     calibration_started = True
                 result = state['completion'].wait(deadline)
                 if result is None:
+                    log_file.write("frequency=%d timeout\n" % (frequency,))
+                    log_file.flush()
                     raise gcmd.error(
                         "Timed out waiting for stable induction resonance"
                         " power at %d Hz" % (frequency,))
                 power, samples = result
+                log_file.write(
+                    "frequency=%d power=%.3f samples=%s\n"
+                    % (frequency, power,
+                       ','.join(["%d" % (sample,) for sample in samples])))
+                log_file.flush()
                 if best_power is None or power > best_power:
                     best_power = power
                     best_frequency = frequency
             self.set_frequency_cmd.send_wait_ack([channel, best_frequency])
+            log_file.write("best_frequency=%d best_power=%.3f\n"
+                           % (best_frequency, best_power))
+            log_file.flush()
         finally:
             state['completion'] = None
             self.sweep_states.pop(channel, None)
             if calibration_started:
                 self.measure_resonance_cmd.send_wait_ack([channel, 0])
+            log_file.close()
         gcmd.respond_info(
             "Induction channel %d resonance frequency: %d Hz"
             " (power %.3f W)" % (channel, best_frequency, best_power))
