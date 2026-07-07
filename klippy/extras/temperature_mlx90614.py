@@ -8,6 +8,7 @@ MLX90614_I2C_ADDR = 0x5a
 MLX90614_I2C_SPEED = 100000
 MLX90614_REPORT_TIME = 0.3
 MLX90614_MIN_REPORT_TIME = 0.1
+MLX90614_READ_RETRIES = 3
 
 MLX90614_REGS = {
     'ambient': 0x06,
@@ -41,6 +42,7 @@ class MLX90614:
             'emissivity', 1.0, above=0., maxval=1.)
         self.emissivity_reg = self._emissivity_to_reg(self.emissivity)
         self.temp = self.min_temp = self.max_temp = 0.0
+        self.read_failures = 0
         self.sample_timer = self.reactor.register_timer(self._sample_mlx90614)
         self.printer.add_object('mlx90614 ' + self.name, self)
         self.printer.register_event_handler('klippy:connect',
@@ -70,12 +72,26 @@ class MLX90614:
                self.emissivity))
 
     def _sample_mlx90614(self, eventtime):
+        attempts = MLX90614_READ_RETRIES + 1
         try:
             raw = self._read_word(self.temperature_source)
             self.temp = raw * 0.02 - 273.15
-        except Exception:
-            logging.exception('mlx90614: Error reading data')
+            self.read_failures = 0
+        except Exception as e:
+            self.read_failures += 1
+            if self.read_failures < attempts:
+                logging.warning(
+                    'mlx90614 %s: Error reading data (%s), retry %d of %d',
+                    self.name, str(e), self.read_failures,
+                    MLX90614_READ_RETRIES)
+                return self.reactor.monotonic() + self.report_time
+            logging.exception(
+                'mlx90614 %s: Error reading data after %d attempts',
+                self.name, attempts)
             self.temp = 0.0
+            self.printer.invoke_shutdown(
+                "MLX90614 sensor '%s' failed after %d read attempts"
+                % (self.name, attempts))
             return self.reactor.NEVER
 
         if self.temp < self.min_temp or self.temp > self.max_temp:
