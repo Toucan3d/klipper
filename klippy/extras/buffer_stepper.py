@@ -7,7 +7,6 @@
 import stepper
 from . import force_move
 
-MIN_KIN_TIME = 0.050
 SDS_CHECK_TIME = 0.001
 
 
@@ -30,7 +29,6 @@ class BufferStepper:
         self.debug = config.getboolean('debug', False)
         self.buffer_time_start = config.getfloat(
             'buffer_time_start', 0.050, above=0.)
-        self.last_kin_flush_time = 0.
         self.kin_flush_delay = SDS_CHECK_TIME
 
         buttons = self.printer.load_object(config, 'buttons')
@@ -100,8 +98,7 @@ class BufferStepper:
             self.kin_flush_delay = self.motion_queuing.get_kin_flush_delay()
         curtime = self.reactor.monotonic()
         est_print_time = self.mcu.estimated_print_time(curtime)
-        kin_time = max(est_print_time + MIN_KIN_TIME, self.last_kin_flush_time)
-        kin_time += self.kin_flush_delay
+        kin_time = self.motion_queuing.calc_step_gen_restart(est_print_time)
         min_print_time = max(est_print_time + self.buffer_time_start, kin_time)
         if min_print_time > self.next_cmd_time:
             self.next_cmd_time = min_print_time
@@ -137,7 +134,6 @@ class BufferStepper:
         self.sync_print_time()
         self.next_cmd_time = self._submit_move(self.next_cmd_time, movepos,
                                                speed, accel)
-        self.last_kin_flush_time = self.next_cmd_time
         self.motion_queuing.note_mcu_movequeue_activity(self.next_cmd_time)
 
     def get_move_duration(self, movepos, speed, accel):
