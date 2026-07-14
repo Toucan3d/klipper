@@ -89,10 +89,13 @@ def send_boot_token(port, baud):
             time.sleep(BOOT_TOKEN_BURST_DELAY)
 
 
-def run_pymdfu(image, port, baud):
-    args = find_pymdfu_command() + [
-        "update", "--verbose", "debug", "--tool", "serial",
-        "--image", image, "--port", port, "--baudrate", str(baud)
+def run_pymdfu(image, port, baud, verbose):
+    args = find_pymdfu_command() + ["update"]
+    if verbose:
+        args += ["--verbose", "debug"]
+    args += [
+        "--tool", "serial", "--image", image, "--port", port,
+        "--baudrate", str(baud)
     ]
     output_line("Running: %s" % (" ".join(args),))
     try:
@@ -141,6 +144,10 @@ def main():
             "you are manually resetting into the 1s boot-entry window."
         )
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable debug output from pymdfu"
+    )
     args = parser.parse_args()
 
     try:
@@ -154,7 +161,7 @@ def main():
         wait_for_port(args.port, args.baud, args.port_wait)
         if args.send_token:
             send_boot_token(args.port, args.baud)
-        run_pymdfu(args.image, args.port, args.baud)
+        run_pymdfu(args.image, args.port, args.baud, args.verbose)
     except UpdateError as e:
         output_line("Update error: %s" % (e,))
         sys.exit(-1)

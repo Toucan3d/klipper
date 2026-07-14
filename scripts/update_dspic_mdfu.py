@@ -151,10 +151,13 @@ def send_boot_token(port, bootloader_baud):
     raise UpdateError("Unable to send bootloader token: %s" % (last_error,))
 
 
-def run_pymdfu(image, port, bootloader_baud):
-    args = find_pymdfu_command() + [
-        "update", "--verbose", "debug", "--tool", "serial",
-        "--image", image, "--port", port, "--baudrate", str(bootloader_baud)
+def run_pymdfu(image, port, bootloader_baud, verbose):
+    args = find_pymdfu_command() + ["update"]
+    if verbose:
+        args += ["--verbose", "debug"]
+    args += [
+        "--tool", "serial", "--image", image, "--port", port,
+        "--baudrate", str(bootloader_baud)
     ]
     output_line("Running: %s" % (" ".join(args),))
     try:
@@ -185,6 +188,10 @@ def main():
         "--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT,
         help="Seconds to wait for console.py to connect to Klipper (default: 5.0)"
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable debug output from pymdfu"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.CRITICAL)
@@ -195,7 +202,7 @@ def main():
             raise UpdateError("Firmware image not found: %s" % (args.image,))
         send_klipper_reset(args.port, args.klipper_baud, args.connect_timeout)
         send_boot_token(args.port, args.baud)
-        run_pymdfu(args.image, args.port, args.baud)
+        run_pymdfu(args.image, args.port, args.baud, args.verbose)
     except UpdateError as e:
         output_line("Update error: %s" % (e,))
         sys.exit(-1)
