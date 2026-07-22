@@ -11,10 +11,13 @@
 # a slow high resolution scan of a small window centered on the detected
 # signal peak, drastically reducing the total scan time.
 #
-# Example config:
+# Example config (standalone, no [probe_eddy_current] section needed -
+# use this when the printer already has another probe, as Klipper only
+# supports a single probe):
 #
 #   [eddy_nozzle_scan]
-#   sensor: probe_eddy_current btt_eddy
+#   i2c_mcu: eddy          # mcu of the LDC1612 (BTT Eddy)
+#   i2c_bus: i2c0f
 #   speed: 10.0            # scan speed in mm/s
 #   x_length: 20.0         # scan area size in X (mm)
 #   y_length: 20.0         # scan area size in Y (mm)
@@ -28,12 +31,19 @@
 #   #fine_resolution: 0.1  # AUTO: Y line distance of the fine scan
 #   #min_signal: 50.0      # AUTO: minimum peak height over baseline (Hz)
 #
+# Alternatively, if the eddy sensor is already configured as the probe
+# of this printer, reference that section instead of the i2c options:
+#
+#   [eddy_nozzle_scan]
+#   sensor: probe_eddy_current btt_eddy
+#
 # The scan starts at the current toolhead position (position the nozzle
 # at the desired Z height over one corner of the scan area first) and
 # covers the area towards +X/+Y.  Z is never commanded during the scan.
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging, os, time
+from . import ldc1612
 
 # Wait this long (in wall time) for the trailing sensor samples to arrive
 SAMPLE_DRAIN_TIMEOUT = 5.
@@ -43,7 +53,15 @@ class EddyNozzleScan:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
-        self.sensor_name = config.get('sensor')
+        self.sensor_name = config.get('sensor', None)
+        self.sensor_helper = None
+        if self.sensor_name is None:
+            # No probe section referenced - drive the LDC1612 directly
+            # from this section's i2c_* options.  This avoids conflicts
+            # with an existing probe ([probe_eddy_current] registers as
+            # the printer's probe and Klipper only supports one).
+            self.sensor_helper = ldc1612.LDC1612(config)
+            self.sensor_name = "ldc1612 " + self.name
         self.speed = config.getfloat('speed', 10., above=0.)
         self.x_length = config.getfloat('x_length', 20., above=0.)
         self.y_length = config.getfloat('y_length', 20., above=0.)
@@ -75,6 +93,8 @@ class EddyNozzleScan:
                                desc=self.cmd_EDDY_NOZZLE_SCAN_AUTO_help)
 
     def _lookup_sensor(self):
+        if self.sensor_helper is not None:
+            return self.sensor_helper
         sensor = self.printer.lookup_object(self.sensor_name, None)
         if sensor is None:
             # Convenience: allow "btt_eddy" for "probe_eddy_current btt_eddy"
