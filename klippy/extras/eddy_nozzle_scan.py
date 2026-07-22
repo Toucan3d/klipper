@@ -11,6 +11,20 @@
 # a slow high resolution scan of a small window centered on the detected
 # signal peak, drastically reducing the total scan time.
 #
+# EDDY_NOZZLE_ROTATE measures the concentricity error (runout) of a
+# rotating nozzle: with the nozzle parked centered over the sensor (or an
+# aperture in a shield plate), it offsets the toolhead onto the flank of
+# the response bell where the signal slope is maximal, measures that
+# slope via a small dither, then rotates the A axis (a manual_stepper,
+# option 'a_stepper') and converts the periodic signal modulation into
+# runout dx(a)/dy(a) via 1st/2nd harmonic analysis - one rotation on the
+# X flank, one on the Y flank. With APPLY=1 the result is added onto the
+# active [ctc] lookup table (via SET_CTC), so repeated runs converge the
+# compensation numerically. If the stepper is registered as a gcode axis
+# (MANUAL_STEPPER ... GCODE_AXIS=A) the rotation runs through the normal
+# move pipeline and an active ctc compensation takes effect during the
+# measurement, making APPLY iterations self-verifying.
+#
 # Example config (standalone, no [probe_eddy_current] section needed -
 # use this when the printer already has another probe, as Klipper only
 # supports a single probe):
@@ -49,7 +63,7 @@
 # so the measurement spot always ends up mid-scan.
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, os, time
+import logging, math, os, time
 from . import ldc1612
 
 # Wait this long (in wall time) for the trailing sensor samples to arrive
@@ -85,6 +99,19 @@ class EddyNozzleScan:
         self.fine_resolution = config.getfloat('fine_resolution', 0.1,
                                                above=0.)
         self.min_signal = config.getfloat('min_signal', 50., above=0.)
+        # Rotation (runout) measurement on a manual_stepper driven A axis
+        self.a_stepper = config.get('a_stepper', 'stepper_a')
+        self.a_units_per_rev = config.getfloat('a_units_per_rev', 360.,
+                                               above=0.)
+        self.flank_offset = config.getfloat('flank_offset', 1.2, above=0.)
+        self.rotations = config.getint('rotations', 2, minval=1)
+        self.a_speed = config.getfloat('a_speed', 10., above=0.)
+        self.dither = config.getfloat('dither', 0.2, above=0.)
+        self.dither_time = config.getfloat('dither_time', 2.0, above=0.)
+        # Raw sample gathering (rotation measurement)
+        self._raw = []
+        self._raw_active = False
+        self._raw_last_time = 0.
         # Sample collection state
         self._samples = []
         self._recording = False
@@ -99,6 +126,9 @@ class EddyNozzleScan:
         gcode.register_command('EDDY_NOZZLE_SCAN_AUTO',
                                self.cmd_EDDY_NOZZLE_SCAN_AUTO,
                                desc=self.cmd_EDDY_NOZZLE_SCAN_AUTO_help)
+        gcode.register_command('EDDY_NOZZLE_ROTATE',
+                               self.cmd_EDDY_NOZZLE_ROTATE,
+                               desc=self.cmd_EDDY_NOZZLE_ROTATE_help)
 
     def _lookup_sensor(self):
         if self.sensor_helper is not None:
@@ -273,6 +303,279 @@ class EddyNozzleScan:
                 ('start_x', "%.5f" % (start_pos[0],)),
                 ('start_y', "%.5f" % (start_pos[1],)),
                 ('z_height', "%.5f" % (start_pos[2],))]
+
+    # --- Rotation (runout) measurement helpers ---
+    def _raw_client(self, msg):
+        if not self._raw_active:
+            return False
+        data = msg['data']
+        if data:
+            self._raw_last_time = data[-1][0]
+            self._raw.extend([(s[0], s[1]) for s in data])
+        return True
+
+    def _drain_raw(self, until_time):
+        reactor = self.printer.get_reactor()
+        deadline = reactor.monotonic() + SAMPLE_DRAIN_TIMEOUT
+        while self._raw_last_time < until_time:
+            systime = reactor.monotonic()
+            if systime > deadline:
+                raise self.printer.command_error(
+                    "eddy_nozzle_scan: timeout waiting for sensor samples")
+            reactor.pause(systime + 0.100)
+
+    def _window_mean(self, t0, t1):
+        vals = [fv for tv, fv in self._raw if t0 <= tv <= t1]
+        if len(vals) < 5:
+            raise self.printer.command_error(
+                "eddy_nozzle_scan: too few sensor samples in window")
+        return sum(vals) / len(vals)
+
+    def _settle_measure(self, dwell):
+        # Wait for vibrations to settle, then average over 'dwell' seconds
+        self._toolhead.wait_moves()
+        t0 = self._toolhead.get_last_move_time() + 0.200
+        self._toolhead.dwell(0.200 + dwell)
+        self._toolhead.wait_moves()
+        t1 = self._toolhead.get_last_move_time()
+        self._drain_raw(t1)
+        return self._window_mean(t0, t1)
+
+    def _measure_flank_slope(self, fx, fy, axis, dither, dwell, move_speed):
+        # Signal slope (Hz/mm) at the flank point via +/- dither.
+        # Pattern +,-,+ cancels linear thermal drift.
+        def at(offs):
+            px = fx + (offs if axis == 0 else 0.)
+            py = fy + (offs if axis == 1 else 0.)
+            self._toolhead.manual_move([px, py, None], move_speed)
+            return self._settle_measure(dwell)
+        s_p1 = at(dither)
+        s_m = at(-dither)
+        s_p2 = at(dither)
+        self._toolhead.manual_move([fx, fy, None], move_speed)
+        slope = (s_m - (s_p1 + s_p2) * .5) / (2. * dither)
+        return slope
+
+    def _lookup_a_stepper(self):
+        ms = self.printer.lookup_object(
+            'manual_stepper ' + self.a_stepper, None)
+        if ms is None:
+            raise self.printer.command_error(
+                "eddy_nozzle_scan: manual_stepper '%s' not found"
+                % (self.a_stepper,))
+        return ms
+
+    def _rotate_and_record(self, ms, rotations, a_speed):
+        # Rotate the A axis and return (a_start, a_end, t_start, t_end)
+        # with angles in degrees and times in print time
+        upr = self.a_units_per_rev
+        scale = 360. / upr
+        self._toolhead.wait_moves()
+        a0 = ms.commanded_pos * scale
+        target_units = ms.commanded_pos + rotations * upr
+        t0 = self._toolhead.get_last_move_time()
+        axis_id = ms.get_axis_gcode_id()
+        if axis_id is not None:
+            # Drive via the registered gcode axis so an active ctc
+            # transform compensates during the rotation
+            gcode = self.printer.lookup_object('gcode')
+            gcode.run_script_from_command(
+                "SAVE_GCODE_STATE NAME=_eddy_rot\n"
+                "G90\n"
+                "G1 %s%.4f F%.3f\n"
+                "RESTORE_GCODE_STATE NAME=_eddy_rot"
+                % (axis_id, target_units, a_speed / scale * 60.))
+        else:
+            ms.do_move(target_units, a_speed / scale, ms.accel, sync=True)
+        self._toolhead.wait_moves()
+        t1 = self._toolhead.get_last_move_time()
+        self._drain_raw(t1)
+        return a0, a0 + rotations * 360., t0, t1
+
+    def _analyze_rotation(self, a0, a1, t0, t1):
+        # Joint least squares fit of offset + linear drift + 1st/2nd
+        # harmonic (vs rotation angle). A sequential detrend-then-Fourier
+        # approach biases both estimates over a small number of turns, so
+        # all six coefficients are solved together via normal equations.
+        pts = [(tv, fv) for tv, fv in self._raw if t0 <= tv <= t1]
+        if len(pts) < 100:
+            raise self.printer.command_error(
+                "eddy_nozzle_scan: too few samples during rotation")
+        rate = (a1 - a0) / (t1 - t0)
+        mt = sum(tv for tv, fv in pts) / len(pts)
+        nc = 6
+        nmat = [[0.] * nc for i in range(nc)]
+        vec = [0.] * nc
+        for tv, fv in pts:
+            ang = math.radians(a0 + rate * (tv - t0))
+            cols = (1., tv - mt, math.cos(ang), math.sin(ang),
+                    math.cos(2. * ang), math.sin(2. * ang))
+            for i in range(nc):
+                vec[i] += cols[i] * fv
+                for j in range(i, nc):
+                    nmat[i][j] += cols[i] * cols[j]
+        for i in range(nc):
+            for j in range(i):
+                nmat[i][j] = nmat[j][i]
+        coeffs = self._solve_linear(nmat, vec)
+        mean, drift = coeffs[0], coeffs[1]
+        harmonics = [(coeffs[2], coeffs[3]), (coeffs[4], coeffs[5])]
+        return mean, drift, harmonics
+
+    def _solve_linear(self, mat, vec):
+        # Gaussian elimination with partial pivoting
+        n = len(vec)
+        a = [row[:] + [vec[i]] for i, row in enumerate(mat)]
+        for col in range(n):
+            piv = max(range(col, n), key=lambda r: abs(a[r][col]))
+            if abs(a[piv][col]) < 1e-12:
+                raise self.printer.command_error(
+                    "eddy_nozzle_scan: singular fit matrix")
+            a[col], a[piv] = a[piv], a[col]
+            for r in range(col + 1, n):
+                fac = a[r][col] / a[col][col]
+                for c in range(col, n + 1):
+                    a[r][c] -= fac * a[col][c]
+        x = [0.] * n
+        for r in range(n - 1, -1, -1):
+            x[r] = (a[r][n] - sum(a[r][c] * x[c]
+                                  for c in range(r + 1, n))) / a[r][r]
+        return x
+
+    def _eval_harmonics(self, harmonics, angle_deg):
+        v = 0.
+        for order, (an, bn) in enumerate(harmonics, start=1):
+            ang = math.radians(angle_deg * order)
+            v += an * math.cos(ang) + bn * math.sin(ang)
+        return v
+
+    cmd_EDDY_NOZZLE_ROTATE_help = (
+        "Measure nozzle runout: park on the signal flank of the eddy"
+        " sensor response, rotate the A axis and correlate the signal"
+        " modulation with the rotation angle. Optionally update the ctc"
+        " lookup table (APPLY=1). Position the nozzle centered over the"
+        " sensor/aperture before running.")
+    def cmd_EDDY_NOZZLE_ROTATE(self, gcmd):
+        flank_offset = gcmd.get_float('FLANK_OFFSET', self.flank_offset)
+        rotations = gcmd.get_int('ROTATIONS', self.rotations, minval=1)
+        a_speed = gcmd.get_float('A_SPEED', self.a_speed, above=0.)
+        dither = gcmd.get_float('DITHER', self.dither, above=0.)
+        dither_time = gcmd.get_float('DITHER_TIME', self.dither_time,
+                                     above=0.)
+        move_speed = gcmd.get_float('MOVE_SPEED', self.speed, above=0.)
+        points = gcmd.get_int('POINTS', 8, minval=3, maxval=72)
+        apply_table = gcmd.get_int('APPLY', 0, minval=0, maxval=1)
+        filename = gcmd.get('FILENAME', time.strftime(
+            "eddy_nozzle_rotate_%Y%m%d_%H%M%S.csv"))
+        sensor = self._lookup_sensor()
+        ms = self._lookup_a_stepper()
+        self._toolhead = self.printer.lookup_object('toolhead')
+        self._check_homed()
+        self._toolhead.wait_moves()
+        center = self._toolhead.get_position()
+        results = {}
+        self._raw = []
+        self._raw_last_time = 0.
+        self._raw_active = True
+        sensor.add_client(self._raw_client)
+        try:
+            self._toolhead.dwell(0.500)
+            for axis, name in ((0, 'x'), (1, 'y')):
+                fx = center[0] + (flank_offset if axis == 0 else 0.)
+                fy = center[1] + (flank_offset if axis == 1 else 0.)
+                self._toolhead.manual_move([fx, fy, None], move_speed)
+                slope = self._measure_flank_slope(
+                    fx, fy, axis, dither, dither_time, move_speed)
+                if slope <= 0.:
+                    raise self.printer.command_error(
+                        "eddy_nozzle_scan: no usable signal slope on %s"
+                        " flank (%.2f Hz/mm). Is the nozzle centered over"
+                        " the sensor?" % (name, slope))
+                a0, a1, t0, t1 = self._rotate_and_record(
+                    ms, rotations, a_speed)
+                mean, drift, harmonics = self._analyze_rotation(
+                    a0, a1, t0, t1)
+                results[name] = {
+                    'slope': slope, 'mean': mean, 'drift': drift,
+                    'harmonics': harmonics,
+                    'window': (a0, a1, t0, t1)}
+        finally:
+            self._raw_active = False
+        self._toolhead.manual_move([center[0], center[1], None], move_speed)
+        # Convert signal harmonics to runout vs angle. Sign: at the +axis
+        # flank the response falls with increasing offset, so a runout
+        # towards +axis lowers the signal by slope*runout.
+        ctc = self.printer.lookup_object('ctc', None)
+        if ctc is not None and ctc.table.n:
+            angles = [a % 360. for a in ctc.table.angles]
+        else:
+            angles = [i * 360. / points for i in range(points)]
+        delta = {}
+        for name in ('x', 'y'):
+            r = results[name]
+            delta[name] = [-self._eval_harmonics(r['harmonics'], a)
+                           / r['slope'] for a in angles]
+        self._write_rotation_csv(filename, results, center)
+        # Report
+        msg = ["eddy_nozzle_scan rotation measurement:"]
+        for name in ('x', 'y'):
+            r = results[name]
+            amp1 = math.hypot(*r['harmonics'][0]) / r['slope']
+            msg.append(
+                "%s flank: slope %.1f Hz/mm, drift %.2f Hz/s,"
+                " runout fundamental %.4f mm"
+                % (name, r['slope'], r['drift'], amp1))
+        fmt = lambda vals: ",".join("%.4f" % (v,) for v in vals)
+        old_dx = list(ctc.table.dx) if ctc is not None and ctc.table.n \
+            else [0.] * len(angles)
+        old_dy = list(ctc.table.dy) if ctc is not None and ctc.table.n \
+            else [0.] * len(angles)
+        new_dx = [o + d for o, d in zip(old_dx, delta['x'])]
+        new_dy = [o + d for o, d in zip(old_dy, delta['y'])]
+        set_ctc = ("SET_CTC LOOKUP_A=%s LOOKUP_DX=%s LOOKUP_DY=%s"
+                   % (fmt(angles), fmt(new_dx), fmt(new_dy)))
+        if apply_table:
+            if ctc is None:
+                raise gcmd.error(
+                    "eddy_nozzle_scan: APPLY=1 requires a [ctc] section")
+            gcode = self.printer.lookup_object('gcode')
+            gcode.run_script_from_command(set_ctc)
+            msg.append("ctc lookup table updated (%d points)"
+                       % (len(angles),))
+        else:
+            msg.append("Suggested update (not applied, use APPLY=1):")
+            msg.append(set_ctc)
+        msg.append("Samples written to %s" % (filename,))
+        gcmd.respond_info("\n".join(msg))
+
+    def _write_rotation_csv(self, filename, results, center):
+        if not os.path.isabs(filename):
+            filename = os.path.join(self.output_dir, filename)
+        try:
+            with open(filename, "w") as f:
+                f.write("# eddy_nozzle_scan rotation sensor='%s'\n"
+                        % (self.sensor_name,))
+                hdr = ["center_x=%.5f center_y=%.5f center_z=%.5f"
+                       % (center[0], center[1], center[2])]
+                for name in ('x', 'y'):
+                    r = results[name]
+                    hdr.append("slope_%s=%.3f drift_%s=%.4f"
+                               % (name, r['slope'], name, r['drift']))
+                f.write("# %s\n" % (" ".join(hdr),))
+                f.write("print_time,flank,angle_deg,frequency\n")
+                for name in ('x', 'y'):
+                    a0, a1, t0, t1 = results[name]['window']
+                    rate = (a1 - a0) / (t1 - t0)
+                    for tv, fv in self._raw:
+                        if tv < t0 or tv > t1:
+                            continue
+                        ang = (a0 + rate * (tv - t0)) % 360.
+                        f.write("%.6f,%s,%.4f,%.3f\n"
+                                % (tv, name, ang, fv))
+        except (IOError, OSError) as e:
+            raise self.printer.command_error(
+                "eddy_nozzle_scan: error writing '%s': %s" % (filename, e))
+        return filename
 
     cmd_EDDY_NOZZLE_SCAN_help = (
         "Raster scan the nozzle over an upside down eddy current sensor"
