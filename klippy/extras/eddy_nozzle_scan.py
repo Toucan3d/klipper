@@ -22,6 +22,7 @@
 #   x_length: 20.0         # scan area size in X (mm)
 #   y_length: 20.0         # scan area size in Y (mm)
 #   resolution: 0.5        # Y distance between scan lines (mm)
+#   #center: False         # treat the current position as the scan CENTER
 #   #bidirectional: True   # scan each line forth and back before stepping Y
 #   #output_dir: /tmp      # directory the .csv files are written to
 #   #coarse_speed: 40.0    # AUTO: speed of the coarse locating scan
@@ -40,6 +41,12 @@
 # The scan starts at the current toolhead position (position the nozzle
 # at the desired Z height over one corner of the scan area first) and
 # covers the area towards +X/+Y.  Z is never commanded during the scan.
+# With 'center: True' (or CENTER=1 on the command) the current position
+# is treated as the CENTER of the scan area instead: the toolhead first
+# moves by -x_length/2 / -y_length/2 to the start corner and returns to
+# the center position when the scan is done.  Use this when the nozzle
+# is parked directly over the sensor (or an aperture in a shield plate)
+# so the measurement spot always ends up mid-scan.
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging, os, time
@@ -66,6 +73,7 @@ class EddyNozzleScan:
         self.x_length = config.getfloat('x_length', 20., above=0.)
         self.y_length = config.getfloat('y_length', 20., above=0.)
         self.resolution = config.getfloat('resolution', 0.5, above=0.)
+        self.center = config.getboolean('center', False)
         self.bidirectional = config.getboolean('bidirectional', True)
         self.output_dir = config.get('output_dir', '/tmp')
         # Coarse/fine two phase scan (EDDY_NOZZLE_SCAN_AUTO)
@@ -276,16 +284,26 @@ class EddyNozzleScan:
         resolution = gcmd.get_float('RESOLUTION', self.resolution, above=0.)
         bidirectional = bool(gcmd.get_int(
             'BIDIRECTIONAL', int(self.bidirectional), minval=0, maxval=1))
+        center = bool(gcmd.get_int('CENTER', int(self.center),
+                                   minval=0, maxval=1))
         filename = gcmd.get('FILENAME', time.strftime(
             "eddy_nozzle_scan_%Y%m%d_%H%M%S.csv"))
         sensor = self._lookup_sensor()
         self._toolhead = self.printer.lookup_object('toolhead')
         self._check_homed()
+        self._toolhead.wait_moves()
+        orig_pos = self._toolhead.get_position()
+        if center:
+            # Current position is the center of the scan area - move to
+            # the start corner first
+            self._toolhead.manual_move(
+                [orig_pos[0] - x_length * .5, orig_pos[1] - y_length * .5,
+                 None], speed)
         samples, num_lines, start_pos = self._scan_region(
             sensor, speed, x_length, y_length, resolution, bidirectional)
-        # Return to the scan start position
+        # Return to the original position (scan center or start corner)
         self._toolhead.manual_move(
-            [start_pos[0], start_pos[1], None], speed)
+            [orig_pos[0], orig_pos[1], None], speed)
         params = self._scan_params(speed, x_length, y_length, resolution,
                                    bidirectional, start_pos)
         outname = self._write_csv(filename, samples, params)
@@ -310,6 +328,8 @@ class EddyNozzleScan:
                                   above=0.)
         bidirectional = bool(gcmd.get_int('BIDIRECTIONAL', 0,
                                           minval=0, maxval=1))
+        center = bool(gcmd.get_int('CENTER', int(self.center),
+                                   minval=0, maxval=1))
         min_signal = gcmd.get_float('MIN_SIGNAL', self.min_signal, above=0.)
         basename = gcmd.get('FILENAME', time.strftime(
             "eddy_nozzle_scan_%Y%m%d_%H%M%S"))
@@ -318,6 +338,13 @@ class EddyNozzleScan:
         sensor = self._lookup_sensor()
         self._toolhead = self.printer.lookup_object('toolhead')
         self._check_homed()
+        if center:
+            # Current position is the center of the coarse scan area
+            self._toolhead.wait_moves()
+            cur_pos = self._toolhead.get_position()
+            self._toolhead.manual_move(
+                [cur_pos[0] - x_length * .5, cur_pos[1] - y_length * .5,
+                 None], coarse_speed)
         # Phase 1: fast coarse scan of the full area to locate the nozzle
         gcmd.respond_info("eddy_nozzle_scan: coarse scan %.1fx%.1fmm ..."
                           % (x_length, y_length))
