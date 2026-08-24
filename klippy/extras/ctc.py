@@ -264,6 +264,28 @@ class CTC:
             'lookup_dy': list(self.table.dy),
         }
 
+    def set_table(self, angles, dx, dy):
+        # Public runtime table update (used by the ctc_ilc calibration
+        # launcher). Angles are reduced modulo 360; the interpolation
+        # mode is kept.
+        if not (len(angles) == len(dx) == len(dy)):
+            raise self.printer.command_error(
+                "ctc table update requires equally long angle/dx/dy"
+                " lists (a=%d dx=%d dy=%d)"
+                % (len(angles), len(dx), len(dy)))
+        angles = [a % 360. for a in angles]
+        self._reject_duplicate_angles(angles, self.printer.command_error)
+        self._set_table(angles, list(dx), list(dy),
+                        self.table.interpolate)
+        # The transform output changed for a fixed toolhead position;
+        # resync gcode_move so subsequent moves stay continuous.
+        self.gcode_move.reset_last_position()
+
+    def clear_table(self):
+        # Disable compensation until a new table is set (or restored
+        # from the config on restart).
+        self.set_table([], [], [])
+
     def _set_table(self, angles, dx, dy, interpolate):
         table = LookupTable(angles, dx, dy, interpolate)
         self.table = table
