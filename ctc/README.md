@@ -66,9 +66,11 @@ Copy `scripts/build/ctc_ilc_auto-aarch64` and
 #result_variant: sign_inverted   # which final lookup file is persisted
 ```
 
-`CTC_ILC_CALIBRATE` starts a run (the eddy-sensor load cell must already
-be positioned; use `DISABLE_LOOKUP=1` to clear an active `[ctc]` table
-first). `CTC_ILC_STATUS` reports progress, `CTC_ILC_ABORT` stops the
+`CTC_ILC_CALIBRATE` starts a run. The head must already be at the
+measurement position with the eddy-sensor load cell in place - the
+calibration captures the current X/Y/Z position as its measurement base
+and starts measuring immediately (use `DISABLE_LOOKUP=1` to clear an
+active `[ctc]` table first). `CTC_ILC_STATUS` reports progress, `CTC_ILC_ABORT` stops the
 run. On success the new lookup is applied to `[ctc]` immediately and
 staged for `SAVE_CONFIG`.
 
