@@ -24,9 +24,14 @@ section overrides the selection.
 
 ## Compatibility
 
-The binaries are built with Nuitka (onefile) inside Debian Bullseye
-containers, so they run on any glibc-based distribution with glibc >=
-Bullseye's (Bullseye, Bookworm and newer). The CPython runtime is
+The binaries are built with Nuitka (onefile). `ctc_ilc_auto-aarch64` is
+built in a Debian Bullseye container and runs on any glibc-based
+distribution with glibc >= 2.31 (Bullseye, Bookworm and newer; verified
+on both). `ctc_ilc_auto-armv7l` is currently built natively on a 32-bit
+Raspberry Pi OS Bookworm host and therefore needs glibc >= 2.36
+(Bookworm or newer); it is built without onefile compression
+(`--onefile-no-compression`) because the zstd step runs out of memory in
+a 32-bit process on a 2 GB Pi. The CPython runtime is
 bundled - no Python installation is required on the host. Not supported:
 musl-based distributions (e.g. Alpine) and glibc older than Bullseye.
 
@@ -53,8 +58,15 @@ done
 ```
 
 Copy `scripts/build/ctc_ilc_auto-aarch64` and
-`scripts/build/ctc_ilc_auto-armv7l` into this directory and record the
+`scripts/build/ctc_ilc_auto-armv7l` into this directory (`git
+update-index --chmod=+x` when committing from Windows) and record the
 `CTC_Eddy_SW` commit they were built from in the commit message.
+
+Native build on a Raspberry Pi instead of Docker (`sudo apt install
+patchelf python3-dev ccache zlib1g-dev`, Nuitka in a venv): use the same
+command plus `--onefile-no-compression` on 32-bit hosts. Note that
+`uname -m` reports the kernel architecture; a 32-bit OS on a 64-bit
+kernel produces the armv7l binary.
 
 ## Configuration
 
