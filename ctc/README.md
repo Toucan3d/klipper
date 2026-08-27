@@ -79,13 +79,22 @@ kernel produces the armv7l binary.
 #result_variant: sign_inverted   # which final lookup file is persisted
 ```
 
-`CTC_ILC_CALIBRATE` starts a run. The head must already be at the
-measurement position with the eddy-sensor load cell in place - the
-calibration captures the current X/Y/Z position as its measurement base
-and starts measuring immediately (use `DISABLE_LOOKUP=1` to clear an
-active `[ctc]` table first). `CTC_ILC_STATUS` reports progress, `CTC_ILC_ABORT` stops the
-run. On success the new lookup is applied to `[ctc]` immediately and
-staged for `SAVE_CONFIG`.
+`CTC_ILC_CALIBRATE` starts a run. It first asks to unload the filament,
+then to place the CTC calibration device under the CTC beacon with
+1-2 mm clearance; each step is confirmed with `CTC_ILC_CONTINUE` (or the
+Continue button of the dialog Mainsail/Fluidd show) and can be cancelled
+with `CTC_ILC_ABORT`. The head must already be at the measurement
+position: the calibration captures the current X/Y/Z position as its
+measurement base and starts measuring right after the second
+confirmation (use `DISABLE_LOOKUP=1` to clear an active `[ctc]` table
+first). `CTC_ILC_STATUS` reports progress, `CTC_ILC_ABORT` stops the
+run.
+
+The console only shows the baseline, the improvement of every accepted
+or rejected iteration and the final result; the complete program output
+is kept in `console.log` inside the session directory (and in
+`klippy.log`). On success the sign-inverted lookup - the form `[ctc]`
+stores - is applied to `[ctc]` immediately and staged for `SAVE_CONFIG`.
 
 While a calibration is running, do not send motion G-Code - the
 calibration owns the printer.

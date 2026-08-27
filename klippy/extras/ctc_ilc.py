@@ -19,6 +19,8 @@ import os, sys, subprocess, json, logging
 ABORT_GRACE_TIME = 5.
 CHECK_INTERVAL = 1.
 SESSION_DIR_SENTINEL = 'ILC_SESSION_DIR '
+REPORT_PREFIX = 'ILC_REPORT '
+PENDING_STATES = ('await_filament', 'await_device')
 LOOKUP_OPTIONS = ('lookup_a', 'lookup_dx', 'lookup_dy')
 
 def host_arch():
@@ -60,7 +62,7 @@ class CTCILCLauncher:
         self.abort_deadline = None
         self.printer.register_event_handler('klippy:disconnect',
                                             self._handle_disconnect)
-        for name in ('CALIBRATE', 'STATUS', 'ABORT'):
+        for name in ('CALIBRATE', 'CONTINUE', 'STATUS', 'ABORT'):
             cmd = 'CTC_ILC_' + name
             self.gcode.register_command(
                 cmd, getattr(self, 'cmd_' + cmd),
@@ -77,8 +79,8 @@ class CTCILCLauncher:
     cmd_CTC_ILC_CALIBRATE_help = (
         "Start the autonomous CTC ILC concentricity calibration")
     def cmd_CTC_ILC_CALIBRATE(self, gcmd):
-        if self.proc is not None:
-            raise gcmd.error("An ILC calibration is already running"
+        if self.proc is not None or self.state in PENDING_STATES:
+            raise gcmd.error("An ILC calibration is already in progress"
                              " (CTC_ILC_STATUS / CTC_ILC_ABORT)")
         ctc = self.printer.lookup_object('ctc', None)
         if ctc is not None and ctc.is_active:
@@ -104,8 +106,43 @@ class CTCILCLauncher:
         except OSError as e:
             raise gcmd.error("Unable to create output directory %s: %s"
                              % (self.output_dir, e))
+        self.apiserver = apiserver
+        self.state = 'await_filament'
+        self._prompt("Unload filament",
+                     "Unload the filament before the calibration.",
+                     "When it is unloaded, continue.")
+    def _prompt(self, title, *lines):
+        # Mainsail/Fluidd render action prompts as a dialog; the plain
+        # text covers the console and other front ends.
+        raw = self.gcode.respond_raw
+        raw("// action:prompt_begin " + title)
+        for line in lines:
+            raw("// action:prompt_text " + line)
+        raw("// action:prompt_footer_button Continue|CTC_ILC_CONTINUE")
+        raw("// action:prompt_footer_button Cancel|CTC_ILC_ABORT|error")
+        raw("// action:prompt_show")
+        self._respond("%s: %s Send CTC_ILC_CONTINUE to continue or"
+                      " CTC_ILC_ABORT to cancel."
+                      % (title, " ".join(lines)))
+    def _prompt_end(self):
+        self.gcode.respond_raw("// action:prompt_end")
+    cmd_CTC_ILC_CONTINUE_help = "Confirm the current ILC calibration step"
+    def cmd_CTC_ILC_CONTINUE(self, gcmd):
+        if self.state == 'await_filament':
+            self.state = 'await_device'
+            self._prompt("Place the calibration device",
+                         "Place the CTC calibration device under the CTC"
+                         " beacon with 1-2 mm clearance.",
+                         "The measurement starts when you continue.")
+            return
+        if self.state != 'await_device':
+            raise gcmd.error("No ILC calibration step is waiting for"
+                             " confirmation")
+        self._prompt_end()
+        self._start_process(gcmd)
+    def _start_process(self, gcmd):
         argv = [self.program, '--non-interactive',
-                '--socket', apiserver,
+                '--socket', self.apiserver,
                 '--serial-port', self.serial_port,
                 '--output-dir', self.output_dir]
         try:
@@ -113,6 +150,7 @@ class CTCILCLauncher:
                 argv, cwd=self.output_dir, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except OSError as e:
+            self.state = 'idle'
             raise gcmd.error("Unable to start calibration: %s" % (e,))
         os.set_blocking(self.proc.stdout.fileno(), False)
         self.fd_handle = self.reactor.register_fd(
@@ -129,9 +167,8 @@ class CTCILCLauncher:
         self.check_timer = self.reactor.register_timer(
             self._check_event, self.start_time + CHECK_INTERVAL)
         gcmd.respond_info(
-            "ILC calibration started (pid %d). The calibration moves"
-            " the printer - do not send motion G-Code until it"
-            " finishes." % (self.proc.pid,))
+            "ILC calibration started. It moves the printer - do not"
+            " send motion G-Code until it finishes.")
     cmd_CTC_ILC_STATUS_help = "Report the ILC calibration state"
     def cmd_CTC_ILC_STATUS(self, gcmd):
         status = self.get_status(self.reactor.monotonic())
@@ -147,6 +184,11 @@ class CTCILCLauncher:
         gcmd.respond_info("\n".join(msg))
     cmd_CTC_ILC_ABORT_help = "Abort a running ILC calibration"
     def cmd_CTC_ILC_ABORT(self, gcmd):
+        if self.state in PENDING_STATES:
+            self._prompt_end()
+            self.state = 'idle'
+            gcmd.respond_info("ILC calibration cancelled")
+            return
         if self.proc is None:
             raise gcmd.error("No ILC calibration is running")
         self.abort_requested = True
@@ -193,10 +235,13 @@ class CTCILCLauncher:
             text = line.decode('utf-8', 'replace').rstrip()
             if not text:
                 continue
+            logging.info("ctc_ilc: %s", text)
             if text.startswith(SESSION_DIR_SENTINEL):
                 self.session_dir = text[len(SESSION_DIR_SENTINEL):].strip()
+                continue
             self.last_line = text
-            self._respond("ILC: " + text)
+            if text.startswith(REPORT_PREFIX):
+                self._respond("ILC: " + text[len(REPORT_PREFIX):])
     def _check_event(self, eventtime):
         if self.proc is None:
             return self.reactor.NEVER
@@ -300,17 +345,7 @@ class CTCILCLauncher:
         except (IOError, OSError, ValueError):
             logging.exception("ctc_ilc: unable to read %s", summary_path)
             summary = {}
-        msg = ["ILC calibration complete"]
-        if summary.get('stop_reason'):
-            msg.append("stop reason: %s" % (summary['stop_reason'],))
-        if summary.get('raw_reduction_percent') is not None:
-            msg.append("control-node raw symmetry reduction: %.2f%%"
-                       % (summary['raw_reduction_percent'],))
-        if summary.get('full_5deg_raw_reduction_percent') is not None:
-            msg.append("full 5-degree raw symmetry reduction: %.2f%%"
-                       % (summary['full_5deg_raw_reduction_percent'],))
-        msg.append("session data: %s" % (self.session_dir,))
-        self._respond("\n".join(msg))
+        logging.info("ctc_ilc: session summary %s", json.dumps(summary))
         lookup_path = os.path.join(
             self.session_dir,
             'final_lookup_%s.cfg' % (self.result_variant,))
@@ -319,9 +354,8 @@ class CTCILCLauncher:
         if ctc is not None:
             ctc.set_table(parsed['lookup_a'], parsed['lookup_dx'],
                           parsed['lookup_dy'])
-            self._respond("New lookup table applied to [ctc] for this"
-                          " session (%d points)"
-                          % (len(parsed['lookup_a']),))
+            self._respond("New lookup table (%d points) applied to"
+                          " [ctc]" % (len(parsed['lookup_a']),))
         else:
             self._respond("Warning: no [ctc] section is configured;"
                           " the lookup takes effect after SAVE_CONFIG"
