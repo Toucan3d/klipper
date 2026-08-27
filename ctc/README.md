@@ -17,7 +17,8 @@ repository (`scripts/ctc_ilc_auto.py`).
   with 64-bit OS and most SBCs)
 - `ctc_ilc_auto-armv7l` — 32-bit ARM Linux hosts (32-bit Raspberry Pi OS)
 
-The launcher selects the binary matching `os.uname().machine`
+The launcher selects the binary matching the host userland (pointer
+size, so a 32-bit OS on a 64-bit kernel gets the armv7l build)
 automatically; an explicit `program:` option in the `[ctc_ilc]` config
 section overrides the selection.
 

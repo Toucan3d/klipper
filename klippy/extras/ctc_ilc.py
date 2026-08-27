@@ -14,12 +14,21 @@
 # Copyright (C) 2026
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import os, subprocess, json, logging
+import os, sys, subprocess, json, logging
 
 ABORT_GRACE_TIME = 5.
 CHECK_INTERVAL = 1.
 SESSION_DIR_SENTINEL = 'ILC_SESSION_DIR '
 LOOKUP_OPTIONS = ('lookup_a', 'lookup_dx', 'lookup_dy')
+
+def host_arch():
+    # Name of the binary variant matching the *userland*: a 32-bit OS on a
+    # 64-bit kernel (common on Raspberry Pi) reports aarch64 from uname but
+    # needs the armv7l build.
+    machine = os.uname().machine
+    if machine.startswith(('aarch64', 'arm')):
+        return 'aarch64' if sys.maxsize > 2**32 else 'armv7l'
+    return machine
 
 class CTCILCLauncher:
     def __init__(self, config):
@@ -28,7 +37,7 @@ class CTCILCLauncher:
         self.gcode = self.printer.lookup_object('gcode')
         default_program = os.path.normpath(os.path.join(
             os.path.dirname(__file__), '..', '..', 'ctc',
-            'ctc_ilc_auto-' + os.uname().machine))
+            'ctc_ilc_auto-' + host_arch()))
         self.program = os.path.expanduser(
             config.get('program', default_program))
         self.output_dir = os.path.expanduser(
