@@ -86,9 +86,11 @@ Continue button of the dialog Mainsail/Fluidd show) and can be cancelled
 with `CTC_ILC_ABORT`. The head must already be at the measurement
 position: the calibration captures the current X/Y/Z position as its
 measurement base and starts measuring right after the second
-confirmation (use `DISABLE_LOOKUP=1` to clear an active `[ctc]` table
-first). `CTC_ILC_STATUS` reports progress, `CTC_ILC_ABORT` stops the
-run.
+confirmation. The run must be free of Z compensation: an active `[ctc]`
+lookup table or an active bed mesh aborts the command unless
+`DISABLE_LOOKUP=1` / `DISABLE_MESH=1` are given, which clear the table
+and run `BED_MESH_CLEAR` for this session. `CTC_ILC_STATUS` reports
+progress, `CTC_ILC_ABORT` stops the run.
 
 The console only shows the baseline, the improvement of every accepted
 or rejected iteration and the final result; the complete program output

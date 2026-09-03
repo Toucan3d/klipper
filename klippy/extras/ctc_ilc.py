@@ -92,6 +92,16 @@ class CTCILCLauncher:
             ctc.clear_table()
             gcmd.respond_info(
                 "ctc lookup compensation disabled for this run")
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        if bed_mesh is not None and bed_mesh.get_mesh() is not None:
+            if not gcmd.get_int('DISABLE_MESH', 0):
+                raise gcmd.error(
+                    "A bed mesh is active. The calibration must run"
+                    " without mesh compensation - rerun with"
+                    " DISABLE_MESH=1 to clear it for this session")
+            self.gcode.run_script_from_command("BED_MESH_CLEAR")
+            gcmd.respond_info(
+                "bed mesh compensation disabled for this run")
         apiserver = self.printer.get_start_args().get('apiserver')
         if not apiserver:
             raise gcmd.error("Klipper was started without an API server"
