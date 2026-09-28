@@ -31,16 +31,16 @@ section overrides the selection.
 
 ## Compatibility
 
-The binaries are built with Nuitka (onefile). The `aarch64` builds are
-made in a Debian Bullseye container and run on any glibc-based
-distribution with glibc >= 2.31 (Bullseye, Bookworm and newer; verified
-on both). The `armv7l` builds are currently made natively on a 32-bit
-Raspberry Pi OS Bookworm host and therefore need glibc >= 2.36
-(Bookworm or newer); they are built without onefile compression
-(`--onefile-no-compression`) because the zstd step runs out of memory in
-a 32-bit process on a 2 GB Pi. The CPython runtime is bundled - no
-Python installation is required on the host. Not supported: musl-based
-distributions (e.g. Alpine) and glibc older than Bullseye.
+The binaries are built with Nuitka (onefile) in Debian Bullseye
+containers and run on any glibc-based distribution with glibc >= 2.31
+(Bullseye, Bookworm and newer; verified on both). Exception: the
+current `ctc_ilc_auto-armv7l` was built natively on a 32-bit Raspberry
+Pi OS Bookworm host and needs glibc >= 2.36 (Bookworm or newer); it is
+built without onefile compression (`--onefile-no-compression`) because
+the zstd step runs out of memory in a 32-bit process on a 2 GB Pi. A
+Docker rebuild lifts that restriction. The CPython runtime is bundled -
+no Python installation is required on the host. Not supported:
+musl-based distributions (e.g. Alpine) and glibc older than Bullseye.
 
 The binaries self-extract to `~/.cache/ctc_ilc/` on start, which avoids
 `noexec`-mounted `/tmp` filesystems.
@@ -51,12 +51,20 @@ Built from the `CTC_Eddy_SW` repository. On any machine with Docker and
 qemu binfmt handlers (`docker run --privileged --rm tonistiigi/binfmt
 --install arm64,arm`):
 
+Bullseye has moved to `archive.debian.org`, and its security pool is no
+longer consistent with the package indexes, so the recipe uses the
+official `python:3.9-bullseye` images (Python and gcc preinstalled)
+and fetches only `patchelf` from the archive:
+
 ```bash
 cd CTC_Eddy_SW
-for img in arm64v8/debian:bullseye arm32v7/debian:bullseye; do
+for img in arm64v8/python:3.9-bullseye arm32v7/python:3.9-bullseye; do
   docker run --rm -v "$PWD":/src -w /src/scripts "$img" bash -c '
-    apt-get update && apt-get install -y gcc python3-dev python3-pip patchelf ccache
-    python3 -m pip install nuitka pyserial
+    echo "deb http://archive.debian.org/debian bullseye main" > /etc/apt/sources.list
+    rm -f /etc/apt/sources.list.d/*
+    apt-get -o Acquire::Check-Valid-Until=false update
+    apt-get install -y --no-install-recommends patchelf ccache
+    python3 -m pip install nuitka pyserial zstandard ordered-set
     for src in ctc_ilc_auto:ctc_ilc_auto angle_calibration:varoline_offset; do
       python3 -m nuitka --onefile --assume-yes-for-downloads \
           --product-version=0.1.0 \
