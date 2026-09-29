@@ -101,7 +101,7 @@ kernel produces the armv7l binary.
 #output_dir: ~/varoline_offset_sessions
 #serial_port: /dev/ttyACM1
 #timeout: 21600
-#initial_a: 0                 # expected X-parallel machine A position (+/-5 deg)
+#initial_a: 0                 # expected X-parallel machine A position; the zero must lie within +/-15 deg
 ```
 
 ## Operation
