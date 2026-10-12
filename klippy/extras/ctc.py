@@ -5,6 +5,27 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import bisect
 
+# Nozzle tilt compensation (experimental, fixed constants for testing).
+#
+# The measured runout (dx, dy) is the displacement of the nozzle tip from
+# the rotation axis. If that runout comes from a deformed (bent) nozzle,
+# the nozzle axis is also tilted by about runout / NOZZLE_LENGTH. The
+# extrudate leaves the outlet along that tilted axis and crosses the gap
+# to the bed (or the previous layer) before it lands, so it touches down
+# further out in the lean direction than the tip itself:
+#     landing offset = runout * (NOZZLE_LENGTH + NOZZLE_GAP) / NOZZLE_LENGTH
+# The lookup result is therefore scaled by TILT_SCALE. With a 50mm nozzle
+# and a 0.2mm gap this adds 0.4% to the compensation (4um per 1mm runout).
+TILT_COMPENSATION = True
+# Length of the nozzle from the mount (where the deformation acts) to the
+# outlet face, in mm.
+NOZZLE_LENGTH = 50.
+# Distance from the outlet face to the surface the extrudate lands on
+# (roughly the layer height), in mm.
+NOZZLE_GAP = 0.2
+TILT_SCALE = ((NOZZLE_LENGTH + NOZZLE_GAP) / NOZZLE_LENGTH
+              if TILT_COMPENSATION else 1.)
+
 
 # PEP 485 isclose()
 def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
@@ -55,10 +76,14 @@ class LookupTable:
         q = axis_pos % 360.
         if not self.interpolate:
             idx = self._nearest_index(q)
-            return (-self.dx[idx], -self.dy[idx])
-        i0, i1, frac = self._segment(q)
-        return (-lerp(frac, self.dx[i0], self.dx[i1]),
-                -lerp(frac, self.dy[i0], self.dy[i1]))
+            dx, dy = self.dx[idx], self.dy[idx]
+        else:
+            i0, i1, frac = self._segment(q)
+            dx = lerp(frac, self.dx[i0], self.dx[i1])
+            dy = lerp(frac, self.dy[i0], self.dy[i1])
+        # TILT_SCALE extrapolates the tip runout to the landing point of
+        # the extrudate (see the nozzle tilt notes at the top of the file).
+        return (-dx * TILT_SCALE, -dy * TILT_SCALE)
 
     def _segment(self, q):
         # Return (i0, i1, frac) for linear interpolation between the two
@@ -259,6 +284,8 @@ class CTC:
             'min_step': self.table.min_step,
             'split_delta_xy': self.splitter.split_delta_xy,
             'move_check_distance_axis': self.splitter.move_check_distance_axis,
+            'tilt_compensation': TILT_COMPENSATION,
+            'tilt_scale': TILT_SCALE,
             'lookup_a': list(self.table.angles),
             'lookup_dx': list(self.table.dx),
             'lookup_dy': list(self.table.dy),
@@ -299,6 +326,8 @@ class CTC:
         return ("ctc: axis=%s active=%d interpolate=%s points=%d"
                 " min_step=%.4f deg\n"
                 "split_delta_xy=%.4f mm  move_check_distance_axis=%.4f%s\n"
+                "tilt_compensation=%d nozzle_length=%.1f mm"
+                " nozzle_gap=%.3f mm tilt_scale=%.6f\n"
                 "lookup_a:  %s\n"
                 "lookup_dx: %s\n"
                 "lookup_dy: %s"
@@ -307,6 +336,7 @@ class CTC:
                    self.splitter.split_delta_xy,
                    self.splitter.move_check_distance_axis,
                    " (auto)" if self.auto_move_check_distance else "",
+                   TILT_COMPENSATION, NOZZLE_LENGTH, NOZZLE_GAP, TILT_SCALE,
                    fmt(self.table.angles), fmt(self.table.dx),
                    fmt(self.table.dy)))
 
