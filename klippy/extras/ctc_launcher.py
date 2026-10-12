@@ -22,6 +22,18 @@ CHECK_INTERVAL = 1.
 SESSION_DIR_SENTINEL = 'ILC_SESSION_DIR '
 REPORT_PREFIX = 'ILC_REPORT '
 PENDING_STATES = ('await_filament', 'await_device')
+LOOKUP_OPTIONS = ('lookup_a', 'lookup_dx', 'lookup_dy')
+
+def write_direct_lookup_file(table, path):
+    # Export a [ctc] table (its get_status() dict) for the calibration
+    # programs. [ctc] stores the runout and applies its negation; the
+    # programs apply the lookup directly, so the columns are negated.
+    fmt = lambda vals: ", ".join("%.5f" % (v,) for v in vals)
+    with open(path, 'w') as f:
+        f.write("lookup_a: %s\nlookup_dx: %s\nlookup_dy: %s\n"
+                % (fmt(table['lookup_a']),
+                   fmt([-v for v in table['lookup_dx']]),
+                   fmt([-v for v in table['lookup_dy']])))
 
 def host_arch():
     # Name of the binary variant matching the *userland*: a 32-bit OS on a
@@ -34,7 +46,7 @@ def host_arch():
 
 class CalibrationLauncher:
     # Subclasses set these and implement the hooks below.
-    command_prefix = None   # e.g. 'CTC_ILC' -> CTC_ILC_CALIBRATE, ...
+    command_prefix = None   # e.g. 'VAROLINE_CTC' -> VAROLINE_CTC_CALIBRATE
     program_stem = None     # binary name in ctc/, without -<arch>
     default_output_dir = None
     label = None            # human name used in console messages

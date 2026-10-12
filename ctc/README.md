@@ -5,7 +5,7 @@ the Klipper console:
 
 | Program | Klipper module | Command |
 |---|---|---|
-| `ctc_ilc_auto-<arch>` | `[ctc_ilc]` (`klippy/extras/ctc_ilc.py`) | `CTC_ILC_CALIBRATE` — concentricity lookup table |
+| `ctc_ilc_auto-<arch>` | `[ctc_ilc]` (`klippy/extras/ctc_ilc.py`) | `VAROLINE_CTC_CALIBRATE` — concentricity lookup table |
 | `varoline_offset-<arch>` | `[varoline_offset]` (`klippy/extras/varoline_offset.py`) | `VAROLINE_OFFSET_CALIBRATE` — slot-angle offset |
 
 Both modules share the process supervision and operator prompts in
@@ -33,13 +33,9 @@ section overrides the selection.
 
 The binaries are built with Nuitka (onefile) in Debian Bullseye
 containers and run on any glibc-based distribution with glibc >= 2.31
-(Bullseye, Bookworm and newer; verified on both). Exception: the
-current `ctc_ilc_auto-armv7l` was built natively on a 32-bit Raspberry
-Pi OS Bookworm host and needs glibc >= 2.36 (Bookworm or newer); it is
-built without onefile compression (`--onefile-no-compression`) because
-the zstd step runs out of memory in a 32-bit process on a 2 GB Pi. A
-Docker rebuild lifts that restriction. The CPython runtime is bundled -
-no Python installation is required on the host. Not supported:
+(Bullseye, Bookworm and newer; verified on both for both
+architectures). The CPython runtime is bundled - no Python installation
+is required on the host. Not supported:
 musl-based distributions (e.g. Alpine) and glibc older than Bullseye.
 
 The binaries self-extract to `~/.cache/ctc_ilc/` on start, which avoids
@@ -119,13 +115,20 @@ bed mesh aborts the command unless `DISABLE_MESH=1` is given, which runs
 lines and the result; the complete program output is kept in
 `console.log` inside the session directory (and in `klippy.log`).
 
-`CTC_ILC_CALIBRATE` refuses to run while a `[ctc]` lookup table is
-active unless `DISABLE_LOOKUP=1` is given, which clears it. On success
-the sign-inverted lookup - the form `[ctc]` stores - is applied to
-`[ctc]` immediately and staged for `SAVE_CONFIG`.
+`VAROLINE_CTC_CALIBRATE` refuses to run while a `[ctc]` lookup table is
+active unless one of two options is given. `UPDATE_LOOKUP=1` refines the
+active table: it is exported for the program, which starts its
+iterations from it instead of from zero, so small concentricity changes
+since the last calibration converge in one or two iterations.
+`DISABLE_LOOKUP=1` ignores the active table and measures a new one from
+scratch. In both cases `[ctc]` compensation is switched off when the
+program starts (the program applies the lookup itself) and the previous
+table is restored if the run fails or is aborted. On success the
+sign-inverted lookup - the form `[ctc]` stores - is applied to `[ctc]`
+immediately and staged for `SAVE_CONFIG`.
 
 `VAROLINE_OFFSET_CALIBRATE [INITIAL_A=<deg>]` needs the concentricity
-lookup measured by `CTC_ILC_CALIBRATE`: it requires an active `[ctc]`
+lookup measured by `VAROLINE_CTC_CALIBRATE`: it requires an active `[ctc]`
 table, exports it for the program, switches `[ctc]` compensation off
 for the duration of the run (the program applies the lookup itself) and
 restores it afterwards. The result - the machine A position at which the

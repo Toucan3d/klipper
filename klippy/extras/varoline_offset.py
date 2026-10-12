@@ -2,7 +2,7 @@
 #
 # Finds the machine A position at which the slot of the rotating part is
 # parallel to gantry X. The calibration needs the concentricity lookup
-# measured by CTC_ILC_CALIBRATE: the active [ctc] table is exported in
+# measured by VAROLINE_CTC_CALIBRATE: the active [ctc] table is exported in
 # direct form for the program, compensation is switched off while the
 # program applies the lookup itself, and the table is restored when the
 # run ends. The result is reported on the console and kept in the
@@ -36,28 +36,21 @@ class VarolineOffsetLauncher(ctc_launcher.CalibrationLauncher):
         ctc = self.printer.lookup_object('ctc', None)
         if ctc is None or not ctc.is_active:
             raise gcmd.error(
-                "No active [ctc] lookup table. Run CTC_ILC_CALIBRATE"
+                "No active [ctc] lookup table. Run VAROLINE_CTC_CALIBRATE"
                 " (and SAVE_CONFIG) before the offset calibration")
         self.initial_a = gcmd.get_float('INITIAL_A',
                                         self.default_initial_a)
         table = ctc.get_status(self.reactor.monotonic())
-        angles = list(table['lookup_a'])
-        dx = list(table['lookup_dx'])
-        dy = list(table['lookup_dy'])
-        # [ctc] stores the runout and applies its negation; the program
-        # applies the lookup directly, so export the negated columns.
         self.lookup_file = os.path.join(self.output_dir,
                                         'ctc_lookup_direct.cfg')
-        fmt = lambda vals: ", ".join("%.5f" % (v,) for v in vals)
         try:
-            with open(self.lookup_file, 'w') as f:
-                f.write("lookup_a: %s\nlookup_dx: %s\nlookup_dy: %s\n"
-                        % (fmt(angles), fmt([-v for v in dx]),
-                           fmt([-v for v in dy])))
+            ctc_launcher.write_direct_lookup_file(table, self.lookup_file)
         except OSError as e:
             raise gcmd.error("Unable to write the lookup file %s: %s"
                              % (self.lookup_file, e))
-        self.saved_table = (angles, dx, dy)
+        self.saved_table = (list(table['lookup_a']),
+                            list(table['lookup_dx']),
+                            list(table['lookup_dy']))
         self.recommended_a = None
     def program_args(self):
         return ['--lookup', self.lookup_file,
