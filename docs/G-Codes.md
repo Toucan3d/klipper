@@ -518,6 +518,45 @@ parsed as Python literals). If TEMPLATE is an empty string then this
 command will clear any previous template assigned to the pin (one can
 then use `SET_FAN_SPEED` commands to manage the values directly).
 
+### [filament_encoder]
+
+The following commands are available when a
+[filament_encoder config section](Config_Reference.md#filament_encoder)
+is enabled. `ENCODER=<name>` selects the encoder, if it is left out
+the first configured encoder is used. Output lines use key=value
+pairs.
+
+#### ENCODER_QUERY
+`ENCODER_QUERY [ENCODER=<name>]`: Reports the absolute and relative
+length, the edge counts, the speed and the flow of the encoder.
+
+#### ENCODER_RESET
+`ENCODER_RESET [ENCODER=<name>] [ALL=1]`: Restarts the relative
+length. With `ALL=1` the absolute length is restarted as well. The
+reset is done immediately and is not synced to the motion.
+
+#### FLOW_MONITOR_START
+`FLOW_MONITOR_START [ENCODER=<name>] [INTERVAL=<seconds>]
+[LABEL=<text>] [LOG=1]`: Starts a measurement run at the print time
+where the moves queued before the command end. The relative length is
+restarted at that time. During the run a status line is printed every
+INTERVAL seconds (default 1.0, 0 disables the status lines). With
+`LOG=1` one row per sample is written to the CSV file
+`flow_<label>_<date>_<time>.csv` in the folder of the Klipper log. A
+second FLOW_MONITOR_START while a run is active ends the old run with
+a summary first. The command does not wait for the moves.
+
+#### FLOW_MONITOR_STOP
+`FLOW_MONITOR_STOP [ENCODER=<name>] [WAIT=1]`: Ends the run at the
+print time where the moves queued before the command end and prints a
+summary with length, edges, average, minimum and maximum flow and,
+when `extruder` is configured, the commanded length and the ratio of
+measured to commanded length. Without `WAIT=1` the command returns
+immediately and the summary follows once the moves are done. With
+`WAIT=1` the command waits for the moves and the summary, so a
+following macro can check `last_result` in the
+[status](Status_Reference.md#filament_encoder).
+
 ### [filament_switch_sensor]
 
 The following command is available when a

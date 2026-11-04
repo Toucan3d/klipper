@@ -162,6 +162,28 @@ objects:
 - `rpm`: The measured fan speed in rotations per minute if the fan has
   a tachometer_pin defined.
 
+## filament_encoder
+
+The following information is available in
+[filament_encoder some_name](Config_Reference.md#filament_encoder)
+objects:
+- `absolute`: Filament length in mm since the start of Klipper or
+  `ENCODER_RESET ALL=1`.
+- `relative`: Filament length in mm since `ENCODER_RESET` or
+  `FLOW_MONITOR_START`.
+- `edges`, `relative_edges`: The raw edge counts of both lengths.
+- `speed`: Filament speed in mm/s, averaged over `speed_window`.
+- `flow`: Filament flow in mm^3/s, the speed times the filament cross
+  section.
+- `mm_per_edge`: The configured length per edge.
+- `monitor`: The running FLOW_MONITOR run, a dict with `active`,
+  `label`, `elapsed` (s), `length` (mm), `flow_avg` (mm^3/s),
+  `commanded` (mm) and `ratio` (%). `commanded` and `ratio` are None
+  without an `extruder`.
+- `last_result`: The result of the last finished run, the same fields
+  plus `edges`, `flow_min`, `flow_max` and `duration`, or None before
+  the first run.
+
 ## filament_switch_sensor
 
 The following information is available in

@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+# Logic test for klippy/extras/filament_encoder.py with simulated counts
+#
+# Copyright (C) 2026  Toucan3D
+#
+# This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# Run with: python3 test/filament_encoder_logic_test.py
+import math, os, sys, tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'klippy'))
+from extras import filament_encoder, pulse_counter
+
+MM_PER_EDGE = 2.88
+SPEED = 83.3
+AREA = math.pi * 1.75 * 1.75 / 4.
+
+
+######################################################################
+# Stubs
+######################################################################
+
+class StubError(Exception):
+    pass
+
+class StubReactor:
+    NOW = 0.
+    NEVER = 9999999999999999.
+    def __init__(self):
+        self.timers = []
+    def register_async_callback(self, cb, waketime=0.):
+        cb(0.)
+    def register_timer(self, cb, waketime=NEVER):
+        self.timers.append(cb)
+        return cb
+    def unregister_timer(self, timer):
+        self.timers.remove(timer)
+    def monotonic(self):
+        return 0.
+    def pause(self, waketime):
+        return waketime
+
+class StubGCode:
+    def __init__(self):
+        self.mux_commands = {}
+        self.messages = []
+    def register_mux_command(self, cmd, key, value, func, desc=None):
+        self.mux_commands.setdefault(cmd, (key, {}))[1][value] = func
+    def respond_info(self, msg):
+        self.messages.append(msg)
+    def run(self, cmd, **params):
+        key, values = self.mux_commands[cmd]
+        values[params.get(key)](StubGCmd(self, params))
+
+class StubGCmd:
+    def __init__(self, gcode, params):
+        self.gcode = gcode
+        self.params = params
+        self.error = StubError
+    def get(self, name, default=None):
+        return self.params.get(name, default)
+    def get_int(self, name, default=None, minval=None, maxval=None):
+        return int(self.params.get(name, default))
+    def get_float(self, name, default=None, minval=None, maxval=None):
+        return float(self.params.get(name, default))
+    def respond_info(self, msg):
+        self.gcode.respond_info(msg)
+
+class StubToolhead:
+    # Lookahead callbacks run when flush() is called with a print time
+    def __init__(self):
+        self.pending = []
+        self.can_pause = False
+    def register_lookahead_callback(self, cb):
+        self.pending.append(cb)
+    def flush(self, print_time):
+        pending, self.pending = self.pending, []
+        for cb in pending:
+            cb(print_time)
+    def wait_moves(self):
+        pass
+
+class StubExtruder:
+    # Commanded position follows the nominal speed
+    def __init__(self):
+        self.speed = SPEED
+    def find_past_position(self, print_time):
+        return self.speed * print_time
+
+class StubPrinter:
+    def __init__(self, log_dir):
+        self.reactor = StubReactor()
+        self.gcode = StubGCode()
+        self.toolhead = StubToolhead()
+        self.objects = {'gcode': self.gcode, 'toolhead': self.toolhead,
+                        'extruder': StubExtruder()}
+        self.handlers = {}
+        self.log_dir = log_dir
+    def get_reactor(self):
+        return self.reactor
+    def lookup_object(self, name, default=None):
+        return self.objects.get(name, default)
+    def register_event_handler(self, event, cb):
+        self.handlers.setdefault(event, []).append(cb)
+    def send_event(self, event):
+        for cb in self.handlers.get(event, []):
+            cb()
+    def get_start_args(self):
+        return {'log_file': os.path.join(self.log_dir, 'klippy.log')}
+    def config_error(self, msg):
+        return StubError(msg)
+
+class StubConfig:
+    def __init__(self, printer, name, opts):
+        self.printer = printer
+        self.name = name
+        self.opts = opts
+    def get_printer(self):
+        return self.printer
+    def get_name(self):
+        return self.name
+    def get(self, name, default=None):
+        return self.opts.get(name, default)
+    def getfloat(self, name, default=None, above=None):
+        return float(self.opts.get(name, default))
+
+class StubCounter:
+    def __init__(self, printer, pin, sample_time, poll_time):
+        self.callback = None
+    def setup_callback(self, cb):
+        self.callback = cb
+
+def make_encoder(extruder=True):
+    log_dir = tempfile.mkdtemp()
+    printer = StubPrinter(log_dir)
+    opts = {'pin': 'PG13', 'mm_per_edge': MM_PER_EDGE}
+    if extruder:
+        opts['extruder'] = 'extruder'
+    orig = pulse_counter.MCU_counter
+    pulse_counter.MCU_counter = StubCounter
+    try:
+        enc = filament_encoder.FilamentEncoder(
+            StubConfig(printer, 'filament_encoder sfs', opts))
+    finally:
+        pulse_counter.MCU_counter = orig
+    printer.send_event("klippy:ready")
+    return printer, enc
+
+def feed(enc, t0, t1, speed, count0=0, dt=0.010):
+    # Feed samples of a constant filament speed, returns the last count
+    count = count0
+    t = t0
+    edge_rate = speed / MM_PER_EDGE
+    while t <= t1 + 1e-9:
+        count = count0 + int((t - t0) * edge_rate)
+        enc.counter.callback(t, count, t)
+        t += dt
+    return count
+
+def check(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
+    print("ok   %s" % (msg,))
+
+
+######################################################################
+# Tests
+######################################################################
+
+def test_constant_speed():
+    printer, enc = make_encoder()
+    feed(enc, 1., 4., SPEED)
+    speed = enc.get_speed()
+    flow = enc.get_flow()
+    check(abs(speed - SPEED) <= 2.9, "speed %.2f is 83.3 +- 2.9" % speed)
+    check(abs(flow - 200.) <= 7., "flow %.2f is 200 +- 7" % flow)
+
+def test_first_report_baseline():
+    printer, enc = make_encoder()
+    enc.counter.callback(1., 1, 1.)
+    enc.counter.callback(1.01, 1, 1.01)
+    check(enc.get_edges() == 0, "first report only sets the baseline")
+    enc.counter.callback(1.02, 2, 1.02)
+    check(enc.get_edges() == 1, "edges counted after the baseline")
+
+class FakeMCU:
+    def clock32_to_clock64(self, clock):
+        return clock
+    def clock_to_print_time(self, clock):
+        return clock / 1000000.
+
+def test_32bit_wrap():
+    printer, enc = make_encoder()
+    counter = pulse_counter.MCU_counter.__new__(pulse_counter.MCU_counter)
+    counter._mcu = FakeMCU()
+    counter._poll_ticks = 0
+    counter._last_count = 0
+    counter._callback = enc._counter_callback
+    raw = 0xffffffff - 5
+    clock = 1000000
+    for i in range(20):
+        counter._handle_counter_state({
+            'next_clock': clock, 'count': raw & 0xffffffff,
+            'count_clock': clock})
+        raw += 1
+        clock += 10000
+    check(enc.get_edges() == 19, "32 bit wrap keeps counting (%d)"
+          % enc.get_edges())
+
+def test_standstill():
+    printer, enc = make_encoder()
+    count = feed(enc, 1., 3., SPEED)
+    feed(enc, 3.01, 4.02, 0., count0=count)
+    check(enc.get_speed() == 0., "speed falls to 0 within speed_window")
+
+def test_monitor_between_samples():
+    printer, enc = make_encoder()
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', ENCODER='sfs', LABEL='pla', LOG='1')
+    toolhead.flush(2.005)
+    gcode.run('FLOW_MONITOR_STOP', ENCODER='sfs')
+    toolhead.flush(5.005)
+    run = enc.finishing[0]
+    feed(enc, 1., 6., SPEED)
+    res = enc.last_result
+    check(res is not None and run.done, "monitor finished after stop time")
+    check(abs(res['duration'] - 3.) < 1e-6, "duration %.4f is 3.0"
+          % res['duration'])
+    expect = 3. * SPEED
+    check(abs(res['length'] - expect) <= MM_PER_EDGE,
+          "length %.2f within one edge of %.2f" % (res['length'], expect))
+    check(abs(res['commanded'] - expect) < 0.01,
+          "commanded %.2f is %.2f" % (res['commanded'], expect))
+    check(abs(res['ratio'] - 100.) <= 1.5, "ratio %.2f near 100"
+          % res['ratio'])
+    check(abs(res['flow_avg'] - 200.) <= 7., "flow_avg %.1f" % res['flow_avg'])
+    check(res['flow_min'] <= res['flow_avg'] <= res['flow_max'],
+          "flow_min <= flow_avg <= flow_max")
+    check(any(m.startswith("FLOW pla DONE") for m in gcode.messages),
+          "summary line printed")
+    rows = open(run.log_name).read().splitlines()
+    check(rows[0].startswith("print_time,edges,length_mm"), "csv header")
+    check(290 <= len(rows) - 1 <= 301, "csv has %d rows for 3 s"
+          % (len(rows) - 1))
+    check(enc.get_status(0.)['last_result'] is res, "status last_result")
+
+def test_restart_and_stop_without_run():
+    printer, enc = make_encoder(extruder=False)
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_STOP')
+    check("no active monitor" in gcode.messages[-1], "stop without run")
+    gcode.run('FLOW_MONITOR_START', LABEL='one', INTERVAL='0')
+    toolhead.flush(1.5)
+    gcode.run('FLOW_MONITOR_START', LABEL='two', INTERVAL='0')
+    toolhead.flush(2.5)
+    feed(enc, 1., 3., SPEED)
+    check(enc.last_result['label'] == 'one', "second start ends first run")
+    check(enc.last_result['commanded'] is None, "no cmd without extruder")
+    check(enc.run is not None and enc.run.label == 'two', "second run active")
+    st = enc.get_status(0.)
+    check(st['monitor']['active'] and st['monitor']['length'] > 0.,
+          "status monitor of the running run")
+
+def test_reset_and_query():
+    printer, enc = make_encoder()
+    feed(enc, 1., 2., SPEED)
+    printer.gcode.run('ENCODER_RESET')
+    st = enc.get_status(0.)
+    check(st['relative'] == 0. and st['absolute'] > 0., "ENCODER_RESET")
+    printer.gcode.run('ENCODER_RESET', ALL='1')
+    check(enc.get_status(0.)['absolute'] == 0., "ENCODER_RESET ALL=1")
+    printer.gcode.run('ENCODER_QUERY')
+    check(printer.gcode.messages[-1].startswith("ENCODER sfs absolute="),
+          "ENCODER_QUERY")
+
+def main():
+    tests = [test_constant_speed, test_first_report_baseline,
+             test_32bit_wrap, test_standstill, test_monitor_between_samples,
+             test_restart_and_stop_without_run, test_reset_and_query]
+    for test in tests:
+        print("== %s" % (test.__name__,))
+        test()
+    print("All filament_encoder logic tests passed")
+
+if __name__ == '__main__':
+    main()

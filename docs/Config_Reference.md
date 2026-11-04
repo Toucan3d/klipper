@@ -3366,6 +3366,25 @@ sensor_type: temperature_combined
 #   to combine (e.g. 5 degrees). To disable it, use a large value (e.g. 999.9)
 ```
 
+### Filament flow sensor
+
+Shows the filament flow or speed of a
+[filament_encoder](#filament_encoder) like a temperature, with graph
+and min and max values in the front ends. The value is a flow in
+mm^3/s or a speed in mm/s, not a temperature, so choose a clear name
+for the section such as `[temperature_sensor sfs_flow]`.
+
+```
+sensor_type: filament_flow
+encoder:
+#   Name of the [filament_encoder] section to show. This parameter
+#   must be provided.
+#value: flow
+#   Either 'flow' (mm^3/s) or 'speed' (mm/s). The default is 'flow'.
+#report_time: 0.25
+#   Interval in seconds between updates. The default is 0.25.
+```
+
 ## Fans
 
 ### [fan]
@@ -5225,6 +5244,47 @@ switch_pin:
 #pause_delay:
 #   See the "filament_switch_sensor" section for a description of the
 #   above parameters.
+```
+
+### [filament_encoder]
+
+Filament length, speed and flow measurement with the motion output of
+a filament encoder such as the BTT SFS V2.0. Every level change on the
+pin is counted on the micro-controller with the pulse counter, so no
+edges are lost at high speed. The module does no jam or runout
+detection and it cannot detect the direction of the filament. See the
+[command reference](G-Codes.md#filament_encoder) for the commands and
+the [filament flow sensor](#filament-flow-sensor) for a live display.
+
+```
+[filament_encoder my_encoder]
+pin:
+#   Input pin connected to the motion output of the encoder. This
+#   parameter must be provided.
+mm_per_edge:
+#   Filament length in mm between two level changes of the pin. The
+#   BTT SFS V2.0 is specified with 2.88mm, calibrate it by pushing a
+#   marked length through the sensor and comparing the edge count.
+#   This parameter must be provided.
+#filament_diameter: 1.75
+#   Filament diameter in mm, used to turn the speed into a flow. The
+#   default is 1.75.
+#speed_window: 1.0
+#   Time in seconds over which speed and flow are averaged. The
+#   default is 1.0.
+#sample_time: 0.010
+#   How often in seconds the micro-controller reports the count. The
+#   default is 0.010.
+#poll_time: 0.0002
+#   How often in seconds the micro-controller checks the pin. The
+#   default is 0.0002.
+#history_time: 60
+#   Time in seconds of samples kept for lookups by print time. The
+#   default is 60.
+#extruder:
+#   Optional extruder (for example 'extruder') whose commanded travel
+#   is compared with the measured length in FLOW_MONITOR runs. The
+#   default is to not compare.
 ```
 
 ### [tsl1401cl_filament_width_sensor]
