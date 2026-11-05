@@ -3301,11 +3301,12 @@ sensor_type: MLX90614
 #   Which sensor reading to report. One of "ambient" (the sensor's own
 #   die temperature), "object1", or "object2" (the infrared object
 #   temperatures). The default is "object1".
-#emissivity: 1.0
+#emissivity:
 #   Emissivity of the measured surface, from just above 0.0 to 1.0. If
 #   this differs from the value currently stored in the sensor, the new
 #   value is written to the sensor EEPROM during startup. The default
-#   is 1.0.
+#   is to keep the value stored in the sensor and never write the
+#   EEPROM.
 #mlx90614_report_time: 0.3
 #   Interval in seconds between readings. The default is 0.3, with a
 #   minimum of 0.1.

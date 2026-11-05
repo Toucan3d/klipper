@@ -38,9 +38,13 @@ class MLX90614:
             'mlx90614_temperature_source', {
                 'ambient': 'ambient', 'object1': 'object1', 'object2': 'object2'
             }, 'object1')
+        # Without emissivity the value stored in the sensor is kept, the
+        # EEPROM is only written when a different value is configured
         self.emissivity = config.getfloat(
-            'emissivity', 1.0, above=0., maxval=1.)
-        self.emissivity_reg = self._emissivity_to_reg(self.emissivity)
+            'emissivity', None, above=0., maxval=1.)
+        self.emissivity_reg = None
+        if self.emissivity is not None:
+            self.emissivity_reg = self._emissivity_to_reg(self.emissivity)
         self.temp = self.min_temp = self.max_temp = 0.0
         self.read_failures = 0
         self.sample_timer = self.reactor.register_timer(self._sample_mlx90614)
@@ -64,7 +68,9 @@ class MLX90614:
 
     def _init_mlx90614(self):
         current_emissivity = self._read_word('emissivity')
-        if current_emissivity != self.emissivity_reg:
+        if self.emissivity_reg is None:
+            self.emissivity = current_emissivity / float(0xffff)
+        elif current_emissivity != self.emissivity_reg:
             self._write_emissivity(current_emissivity)
         logging.info(
             'mlx90614 %s: source=%s address=%#x emissivity=%.4f'
@@ -184,7 +190,8 @@ class MLX90614:
     def get_status(self, eventtime):
         return {
             'temperature': round(self.temp, 2),
-            'emissivity': round(self.emissivity, 4),
+            'emissivity': (round(self.emissivity, 4)
+                           if self.emissivity is not None else None),
         }
 
 
