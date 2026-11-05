@@ -207,11 +207,16 @@ MAX_BULK_MSG_SIZE = 51
 class FixedFreqReader:
     def __init__(self, mcu, chip_clock_smooth, unpack_fmt):
         self.mcu = mcu
-        self.clock_sync = ClockSyncRegression(mcu, chip_clock_smooth)
         unpack = struct.Struct(unpack_fmt)
         self.unpack_from = unpack.unpack_from
         self.bytes_per_sample = unpack.size
         self.samples_per_block = MAX_BULK_MSG_SIZE // self.bytes_per_sample
+        # Slow sensors (eg, hx711 at 10sps) report a full block of samples
+        # in one message. Converging the clock over fewer chip clocks than
+        # one block overshoots at every block and the timestamps diverge.
+        chip_clock_smooth = max(chip_clock_smooth,
+                                2 * self.samples_per_block)
+        self.clock_sync = ClockSyncRegression(mcu, chip_clock_smooth)
         self.last_sequence = self.max_query_duration = 0
         self.last_overflows = 0
         self.bulk_queue = self.oid = self.query_status_cmd = None
