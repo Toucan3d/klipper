@@ -542,7 +542,8 @@ where the moves queued before the command end. The relative length is
 restarted at that time. During the run a status line is printed every
 INTERVAL seconds (default 1.0, 0 disables the status lines). With
 `LOG=1` one row per sample is written to the CSV file
-`flow_<label>_<date>_<time>.csv` in the folder of the Klipper log.
+`flow_<label>_<date>_<time>.csv` in the `log_path` folder (see the
+[config reference](Config_Reference.md#filament_encoder)).
 With a `load_cell` configured the rows also have the columns `force_g`
 and `force_counts`, the load cell value interpolated to the print time
 of the row (`force_g` is empty until the load cell is calibrated and

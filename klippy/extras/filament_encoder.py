@@ -54,6 +54,7 @@ class FilamentEncoder:
         self.extruder = None
         self.load_cell_name = config.get('load_cell', None)
         self.load_cell = None
+        self.log_path = config.get('log_path', None)
         self.force_history = collections.deque()
         self.force_delay = 0.
         # Sample state
@@ -397,19 +398,33 @@ class FilamentEncoder:
             (lambda pt, r=run: self._set_stop_time(r, pt)))
         return run
     # CSV log
-    def _open_log(self, run):
+    def _get_log_dir(self):
+        if self.log_path is not None:
+            return os.path.normpath(os.path.expanduser(self.log_path))
         log_file = self.printer.get_start_args().get('log_file')
         if not log_file:
+            return None
+        # Prefer the "testdata" folder next to the Klipper log folder
+        log_dir = os.path.dirname(os.path.abspath(log_file))
+        testdata = os.path.join(os.path.dirname(log_dir), 'testdata')
+        if os.path.isdir(testdata):
+            return testdata
+        return log_dir
+    def _open_log(self, run):
+        log_dir = self._get_log_dir()
+        if log_dir is None:
             self.gcode.respond_info(
-                "FLOW log disabled, Klipper runs without a log file")
+                "FLOW log disabled, set log_path or run Klipper with a"
+                " log file")
             return
         label = re.sub(r'[^A-Za-z0-9_.-]', '_', run.label or '')
         stamp = time.strftime("%Y%m%d_%H%M%S")
         fname = "flow_%s_%s.csv" % (label, stamp) if label \
             else "flow_%s.csv" % (stamp,)
-        path = os.path.join(os.path.dirname(os.path.abspath(log_file)),
-                            fname)
+        path = os.path.join(log_dir, fname)
         try:
+            if not os.path.isdir(log_dir):
+                os.makedirs(log_dir)
             run.log_file = open(path, 'w')
             header = ("print_time,edges,length_mm,speed_mm_s,flow_mm3_s,"
                       "commanded_mm")
@@ -417,7 +432,7 @@ class FilamentEncoder:
                 header += ",force_g,force_counts"
             run.log_file.write(header + "\n")
             run.log_name = path
-        except IOError as e:
+        except (IOError, OSError) as e:
             logging.exception("filament_encoder: unable to open log")
             self.gcode.respond_info("FLOW log error: %s" % (str(e),))
             run.log_file = None

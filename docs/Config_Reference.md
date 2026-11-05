@@ -5311,6 +5311,12 @@ mm_per_edge:
 #   samples per second), so log rows and the run summary are delayed
 #   until the samples of that time have arrived. The default is to
 #   not record a force.
+#log_path:
+#   Folder for the CSV files of FLOW_MONITOR_START LOG=1. A leading
+#   '~' is expanded and missing folders are created. The default is
+#   the folder 'testdata' next to the folder of the Klipper log (for
+#   example ~/printer_data/testdata) if it exists, otherwise the
+#   folder of the Klipper log.
 ```
 
 ### [tsl1401cl_filament_width_sensor]

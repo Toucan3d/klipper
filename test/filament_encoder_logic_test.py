@@ -163,10 +163,14 @@ def feed_force(lc, t0, t1, block=12, calibrated=True):
     if rows:
         lc.send(rows)
 
-def make_encoder(extruder=True, load_cell=False):
-    log_dir = tempfile.mkdtemp()
+def make_encoder(extruder=True, load_cell=False, log_path=None):
+    # Log folder inside a private folder, like printer_data/logs
+    log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
+    os.mkdir(log_dir)
     printer = StubPrinter(log_dir)
     opts = {'pin': 'PG13', 'mm_per_edge': MM_PER_EDGE}
+    if log_path is not None:
+        opts['log_path'] = log_path
     if extruder:
         opts['extruder'] = 'extruder'
     if load_cell:
@@ -372,12 +376,33 @@ def test_load_cell_overdue_and_uncalibrated():
     check(late and all(r.endswith(',,') for r in late),
           "rows without load cell samples have empty force")
 
+def run_logged(printer, enc):
+    printer.gcode.run('FLOW_MONITOR_START', LABEL='dir', LOG='1',
+                      INTERVAL='0')
+    return enc.run.log_name
+
+def test_log_dir():
+    printer, enc = make_encoder()
+    path = run_logged(printer, enc)
+    check(os.path.dirname(path) == printer.log_dir,
+          "log next to klippy.log without testdata")
+    testdata = os.path.join(os.path.dirname(printer.log_dir), 'testdata')
+    os.mkdir(testdata)
+    path = run_logged(printer, enc)
+    check(os.path.dirname(path) == testdata,
+          "log in the testdata folder next to the log folder")
+    custom = os.path.join(tempfile.mkdtemp(), 'bench', 'flow')
+    printer, enc = make_encoder(log_path=custom)
+    path = run_logged(printer, enc)
+    check(os.path.dirname(path) == custom and os.path.isfile(path),
+          "log_path option creates the folder")
+
 def main():
     tests = [test_constant_speed, test_first_report_baseline,
              test_32bit_wrap, test_standstill, test_monitor_between_samples,
              test_restart_and_stop_without_run, test_reset_and_query,
              test_monitor_with_load_cell,
-             test_load_cell_overdue_and_uncalibrated]
+             test_load_cell_overdue_and_uncalibrated, test_log_dir]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()
