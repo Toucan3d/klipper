@@ -176,10 +176,16 @@ objects:
 - `flow`: Filament flow in mm^3/s, the speed times the filament cross
   section.
 - `mm_per_edge`: The configured length per edge.
+- `force`: The newest force in grams of the configured `load_cell`, or
+  None without a load cell or before it is calibrated and tared. The
+  value is up to one block of samples (about 1.2 seconds at 10 samples
+  per second) older than the encoder values.
 - `monitor`: The running FLOW_MONITOR run, a dict with `active`,
   `label`, `elapsed` (s), `length` (mm), `flow_avg` (mm^3/s),
-  `commanded` (mm) and `ratio` (%). `commanded` and `ratio` are None
-  without an `extruder`.
+  `commanded` (mm), `ratio` (%), `force_avg`, `force_min` and
+  `force_max` (g). `commanded` and `ratio` are None without an
+  `extruder`, the force values are None without a calibrated and tared
+  `load_cell`.
 - `last_result`: The result of the last finished run, the same fields
   plus `edges`, `flow_min`, `flow_max` and `duration`, or None before
   the first run.

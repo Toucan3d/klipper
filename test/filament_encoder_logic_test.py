@@ -131,12 +131,47 @@ class StubCounter:
     def setup_callback(self, cb):
         self.callback = cb
 
-def make_encoder(extruder=True):
+class StubLoadCellSensor:
+    def get_samples_per_second(self):
+        return 10
+
+class StubLoadCell:
+    def __init__(self):
+        self.clients = []
+    def add_client(self, cb):
+        self.clients.append(cb)
+    def get_sensor(self):
+        return StubLoadCellSensor()
+    def send(self, rows):
+        for cb in self.clients:
+            cb({'data': rows, 'errors': 0, 'overflows': 0})
+
+def force_of(t):
+    return 100. + 10. * t
+
+def feed_force(lc, t0, t1, block=12, calibrated=True):
+    # Send 10 SPS samples in blocks like the hx711
+    rows = []
+    t = t0
+    while t <= t1 + 1e-9:
+        grams = force_of(t) if calibrated else None
+        rows.append([t, grams, int(1000 * t), 0])
+        if len(rows) >= block:
+            lc.send(rows)
+            rows = []
+        t += 0.1
+    if rows:
+        lc.send(rows)
+
+def make_encoder(extruder=True, load_cell=False):
     log_dir = tempfile.mkdtemp()
     printer = StubPrinter(log_dir)
     opts = {'pin': 'PG13', 'mm_per_edge': MM_PER_EDGE}
     if extruder:
         opts['extruder'] = 'extruder'
+    if load_cell:
+        opts['load_cell'] = 'lc'
+        printer.objects['load_cell lc'] = StubLoadCell()
     orig = pulse_counter.MCU_counter
     pulse_counter.MCU_counter = StubCounter
     try:
@@ -274,10 +309,75 @@ def test_reset_and_query():
     check(printer.gcode.messages[-1].startswith("ENCODER sfs absolute="),
           "ENCODER_QUERY")
 
+def test_monitor_with_load_cell():
+    printer, enc = make_encoder(load_cell=True)
+    lc = printer.objects['load_cell lc']
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='force', LOG='1')
+    toolhead.flush(2.005)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(5.005)
+    run = enc.finishing[0]
+    feed(enc, 1., 6., SPEED)
+    check(not run.done, "run waits for the delayed load cell samples")
+    feed_force(lc, 1., 6.)
+    res = enc.last_result
+    check(run.done and res is not None, "run done once force covers stop")
+    check(abs(res['force_avg'] - force_of(3.5)) < 1.,
+          "force_avg %.2f is %.2f" % (res['force_avg'], force_of(3.5)))
+    check(abs(res['force_min'] - force_of(2.1)) < 0.01
+          and abs(res['force_max'] - force_of(5.0)) < 0.01,
+          "force_min %.2f and force_max %.2f inside the run"
+          % (res['force_min'], res['force_max']))
+    check(abs(res['length'] - 3. * SPEED) <= MM_PER_EDGE,
+          "length unchanged with load cell")
+    check("force_avg=" in gcode.messages[-1], "summary has force")
+    rows = open(run.log_name).read().splitlines()
+    check(rows[0].endswith(",force_g,force_counts"), "csv force columns")
+    check(290 <= len(rows) - 1 <= 301, "csv has %d rows" % (len(rows) - 1))
+    worst = 0.
+    for row in rows[1:]:
+        cols = row.split(',')
+        t, grams = float(cols[0]), float(cols[6])
+        worst = max(worst, abs(grams - force_of(t)))
+    check(worst < 0.01, "csv force synced to print time (err %.4f)"
+          % (worst,))
+    st = enc.get_status(0.)
+    check(abs(st['force'] - force_of(6.)) < 0.01, "status force")
+
+def test_load_cell_overdue_and_uncalibrated():
+    printer, enc = make_encoder(load_cell=True)
+    lc = printer.objects['load_cell lc']
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='late', LOG='1', INTERVAL='0')
+    toolhead.flush(1.505)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(2.505)
+    run = enc.finishing[0]
+    feed_force(lc, 1., 1.95, calibrated=False)
+    feed(enc, 1., 2.505 + enc.force_delay - 0.05, SPEED)
+    check(not run.done, "run waits up to force_delay %.1fs"
+          % (enc.force_delay,))
+    feed(enc, 2.505 + enc.force_delay, 2.505 + enc.force_delay + 0.2,
+         SPEED, count0=enc.get_edges())
+    res = enc.last_result
+    check(run.done and res['force_avg'] is None,
+          "overdue load cell finishes without force")
+    rows = open(run.log_name).read().splitlines()[1:]
+    early = [r for r in rows if float(r.split(',')[0]) <= 1.9]
+    late = [r for r in rows if float(r.split(',')[0]) > 1.9]
+    check(early and all(r.split(',')[6] == '' and r.split(',')[7] != ''
+                        for r in early),
+          "uncalibrated rows keep raw counts")
+    check(late and all(r.endswith(',,') for r in late),
+          "rows without load cell samples have empty force")
+
 def main():
     tests = [test_constant_speed, test_first_report_baseline,
              test_32bit_wrap, test_standstill, test_monitor_between_samples,
-             test_restart_and_stop_without_run, test_reset_and_query]
+             test_restart_and_stop_without_run, test_reset_and_query,
+             test_monitor_with_load_cell,
+             test_load_cell_overdue_and_uncalibrated]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()

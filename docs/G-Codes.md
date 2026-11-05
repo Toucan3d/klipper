@@ -542,7 +542,11 @@ where the moves queued before the command end. The relative length is
 restarted at that time. During the run a status line is printed every
 INTERVAL seconds (default 1.0, 0 disables the status lines). With
 `LOG=1` one row per sample is written to the CSV file
-`flow_<label>_<date>_<time>.csv` in the folder of the Klipper log. A
+`flow_<label>_<date>_<time>.csv` in the folder of the Klipper log.
+With a `load_cell` configured the rows also have the columns `force_g`
+and `force_counts`, the load cell value interpolated to the print time
+of the row (`force_g` is empty until the load cell is calibrated and
+tared, `force_counts` holds the raw sensor value). A
 second FLOW_MONITOR_START while a run is active ends the old run with
 a summary first. The command does not wait for the moves.
 
@@ -551,7 +555,9 @@ a summary first. The command does not wait for the moves.
 print time where the moves queued before the command end and prints a
 summary with length, edges, average, minimum and maximum flow and,
 when `extruder` is configured, the commanded length and the ratio of
-measured to commanded length. Without `WAIT=1` the command returns
+measured to commanded length. With a `load_cell` configured the
+summary also has the average, minimum and maximum force in grams.
+Without `WAIT=1` the command returns
 immediately and the summary follows once the moves are done. With
 `WAIT=1` the command waits for the moves and the summary, so a
 following macro can check `last_result` in the

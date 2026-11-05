@@ -3385,6 +3385,24 @@ encoder:
 #   Interval in seconds between updates. The default is 0.25.
 ```
 
+### Load cell force sensor
+
+Shows the force of a [load_cell](#load_cell) in grams like a
+temperature, with graph and min and max values in the front ends. The
+value is 0 until the load cell is calibrated and tared. Choose a clear
+name for the section such as `[temperature_sensor nozzle_force]`.
+
+```
+sensor_type: load_cell_force
+load_cell:
+#   Name of the [load_cell] section to show (for example 'loadcell'
+#   for [load_cell loadcell]). This parameter must be provided.
+#smooth_time: 0.5
+#   Time in seconds over which the force is averaged. The value is
+#   updated with every block of samples from the sensor. The default
+#   is 0.5.
+```
+
 ## Fans
 
 ### [fan]
@@ -5285,6 +5303,14 @@ mm_per_edge:
 #   Optional extruder (for example 'extruder') whose commanded travel
 #   is compared with the measured length in FLOW_MONITOR runs. The
 #   default is to not compare.
+#load_cell:
+#   Optional name of a [load_cell] section (for example 'loadcell'
+#   for [load_cell loadcell]). Its force is recorded in FLOW_MONITOR
+#   runs, synced to the encoder by print time. The load cell sends
+#   its samples in blocks (12 samples, so about 1.2 seconds at 10
+#   samples per second), so log rows and the run summary are delayed
+#   until the samples of that time have arrived. The default is to
+#   not record a force.
 ```
 
 ### [tsl1401cl_filament_width_sensor]
