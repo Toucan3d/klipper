@@ -2956,6 +2956,38 @@ limit is 4 A.
 Do not configure the same MAX31856 chip both as a heater sensor and as a
 separate `[temperature_sensor]`.
 
+#### HCU V0.3 heater (PID on the HCU firmware)
+
+The HCU V0.3 board runs a firmware without the `INDUCTION0` pin. Its
+heater PID runs on the HCU, the host only sends the target temperature.
+Use `heater_pin: induction` together with `control: hcu` and a
+`[mcu hcu]` section. Do not add an `[induction_heater]` section, the
+V0.3 firmware does not have its commands. Klipper stops with an error
+at startup if the HCU firmware does not have the `hotend_set_*`
+commands.
+
+```
+[extruder]
+heater_pin: induction
+control: hcu
+sensor_type: temperature_hcu
+pid_Kp:
+pid_Ki:
+pid_Kd:
+#   PID values sent to the HCU firmware at startup. PID_CALIBRATE
+#   drives the heater with a fixed power through the HCU and stores
+#   new values with SAVE_CONFIG.
+max_power:
+#   Input power limit in watts, sent to the HCU as a current limit of
+#   max_power / 24V. This parameter must be provided.
+#resonance_frequency: 100000
+#   Bridge switching frequency in Hz (100000 to 250000). The default
+#   is 100000.
+#max_delta: 2.0
+#   M109 and TEMPERATURE_WAIT treat the heater as busy while it is more
+#   than max_delta below the target. The default is 2.0.
+```
+
 ### [temperature_probe]
 
 Reports probe coil temperature.  Includes optional thermal drift

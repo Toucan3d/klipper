@@ -1,0 +1,24 @@
+# Test case for the HCU V0.3 toolhead (heater PID on the HCU firmware)
+# hcu_v03.dict is the data dictionary read from the HCU of the test bench
+# (version ?-20260508_144410), it is not part of the downloaded test dicts.
+DICTIONARY stm32f446.dict hcu=hcu_v03.dict
+CONFIG hcu_v03.cfg
+
+# Heater target goes to the HCU firmware
+M104 S240
+G4 P500
+SET_HEATER_CURRENT_LIMIT HEATER=extruder CURRENT=4.0
+
+# Extrusion with both extruder steppers, compared by the encoder
+M83
+FLOW_MONITOR_START LABEL=hcu
+G1 E10 F600
+FLOW_MONITOR_STOP
+
+# A axis and fans on the HCU
+MANUAL_STEPPER STEPPER=stepper_a ENABLE=1
+MANUAL_STEPPER STEPPER=stepper_a SET_POSITION=0
+MANUAL_STEPPER STEPPER=stepper_a MOVE=10 SPEED=50
+M106 S128
+M107
+M104 S0

@@ -868,6 +868,22 @@ above the supplied MINIMUM and/or at or below the supplied MAXIMUM.
 [TARGET=<target_temperature>]`: Sets the target temperature for a
 heater. If a target temperature is not supplied, the target is 0.
 
+### HCU V0.3 heater
+
+The following commands are available for a heater with
+`heater_pin: induction` and `control: hcu` (see the
+[config reference](Config_Reference.md#hcu-v03-heater-pid-on-the-hcu-firmware)).
+
+#### SET_HEATER_CURRENT_LIMIT
+`SET_HEATER_CURRENT_LIMIT HEATER=<heater_name> CURRENT=<amps>`: Set the
+input current limit of the HCU. The value from `max_power` is sent at
+startup.
+
+#### MEASURE_RESONANCE_FREQUENCY
+`MEASURE_RESONANCE_FREQUENCY HEATER=<heater_name> [TIMEOUT=<seconds>]`:
+Turn the heater off, run the resonance sweep of the HCU firmware and
+report the best frequency (default timeout 30 seconds).
+
 ### [induction_heater]
 
 The following commands are available when the
