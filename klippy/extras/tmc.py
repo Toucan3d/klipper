@@ -255,15 +255,29 @@ class TMCStallguardDump:
         self.samples = []
         self.query_timer = None
         self.error = None
+        self.min_interval = 0.
         self.batch_bulk = bulk_sensor.BatchBulkHelper(
             self.printer, self._dump, self._start, self._stop)
         api_resp = {'header': ('time', 'sg_result', 'cs_actual')}
         self.batch_bulk.add_mux_endpoint("tmc/stallguard_dump", "name",
                                          self.stepper_name, api_resp)
+        # Let other host modules subscribe to the samples
+        self.printer.add_object("tmc_stallguard " + self.stepper_name, self)
+    def add_client(self, client_cb, min_interval=0.):
+        # client_cb(msg) gets {'data': [(print_time, sg_result,
+        # cs_actual), ...]} and returns False to stop. min_interval limits
+        # the query rate to keep the bus traffic low
+        self.min_interval = min_interval
+        self.batch_bulk.add_client(client_cb)
+    def has_client(self, client_cb):
+        return client_cb in self.batch_bulk.client_cbs
     def _start(self):
         self.error = None
         status = self.mcu_tmc.get_register_raw("DRV_STATUS")
-        if status.get("spi_status"):
+        # SPI drivers with sg_result in DRV_STATUS (TMC2130, TMC5160)
+        # always use that register, even if the status byte reads zero
+        if status.get("spi_status") or (self.sg2_supp
+                                         and self.sg4_reg_name is None):
             self.optimized_spi = True
         reactor = self.printer.get_reactor()
         self.query_timer = reactor.register_timer(self._query_tmc,
@@ -283,8 +297,12 @@ class TMCStallguardDump:
                 reg_val = status["data"]
                 cs_actual = self.fields.get_field("cs_actual", reg_val)
                 sg_result = self.fields.get_field("sg_result", reg_val)
-                is_stealth = self.fields.get_field("stealth", reg_val)
                 recv_time = status["#receive_time"]
+                # Only drivers with SG4 have a stealth flag in DRV_STATUS,
+                # the TMC2130 has none
+                is_stealth = False
+                if self.sg4_reg_name == "SG4_RESULT":
+                    is_stealth = self.fields.get_field("stealth", reg_val)
                 if is_stealth and self.sg4_reg_name == "SG4_RESULT":
                     sg4_ret = self.mcu_tmc.get_register_raw("SG4_RESULT")
                     sg_result = sg4_ret["data"]
@@ -301,9 +319,9 @@ class TMCStallguardDump:
         print_time = self.mcu.estimated_print_time(recv_time)
         self.samples.append((print_time, sg_result, cs_actual))
         if self.optimized_spi:
-            return eventtime + 0.001
+            return eventtime + max(0.001, self.min_interval)
         # UART queried as fast as possible
-        return eventtime + 0.005
+        return eventtime + max(0.005, self.min_interval)
     def _dump(self, eventtime):
             if self.error:
                 raise self.error
