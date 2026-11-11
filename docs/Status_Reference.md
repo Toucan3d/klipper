@@ -10,6 +10,25 @@ attribute be sure to review the
 [Config Changes document](Config_Changes.md) when upgrading the
 Klipper software.
 
+## a_axis_check
+
+The following information is available in the
+[a_axis_check](Config_Reference.md#a_axis_check) object:
+- `enabled`: Returns True if the step loss check is currently active.
+- `state`: Why the check is in its current state ("enabled", "homing",
+  "motor disabled", "fault", ...).
+- `fault`: The message of the last detected fault, or an empty string.
+  It is cleared when the check is enabled again.
+- `triggered`: The last reported state of the endstop (`None` until the
+  first report).
+- `center`, `span`, `hysteresis`, `tolerance`, `timing_tolerance`: The
+  active parameters.
+- `trigger_count`, `trigger_deviation_min`, `trigger_deviation_max`,
+  `release_count`, `release_deviation_min`, `release_deviation_max`:
+  Number of checked edges since the check was enabled and their smallest
+  and largest deviation from the expected flank of the endstop pin.
+- `max_speed`: The highest axis speed at a checked edge.
+
 ## angle
 
 The following information is available in

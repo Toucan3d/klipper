@@ -2732,6 +2732,79 @@ printer kinematics.
 #   SET_POSITION=x` command. The default is to not enforce a limit.
 ```
 
+### [a_axis_check]
+
+Step loss detection for a rotating axis whose endstop is a pin that the
+axis passes once per revolution. While the axis moves, the module
+watches the endstop and compares it with the commanded stepper position:
+every edge of the endstop signal must occur at the flank of the pin that
+was found during homing, the endstop must trigger whenever the commanded
+position passes over the pin, and it must release when the position
+leaves the pin. A deviation means that the stepper has lost steps. The
+moves are not interrupted for the check.
+
+The micro-controller of the endstop must support the pulse counter
+commands (`config_counter`), which timestamp the edges on the clock that
+also schedules the steps.
+
+The check is inactive after a restart. It is enabled with
+`SET_A_AXIS_CHECK ENABLE=1` once the axis is homed, typically at the end
+of the homing macro, and it is disabled automatically when the stepper
+is homed again, when its motor is disabled and after a fault. On a
+fault the error is reported on the console, a running print is paused
+and `fault_gcode` is run. See the
+[command reference](G-Codes.md#a_axis_check) for details.
+
+```
+[a_axis_check]
+#stepper: manual_stepper stepper_a
+#   Config section of the stepper to monitor. The default is
+#   "manual_stepper stepper_a".
+#pin:
+#   Pin of the endstop. The default is to share the endstop_pin of the
+#   monitored stepper (no duplicate_pin_override section is needed).
+#period: 360
+#   Distance, in units of the stepper position, after which the endstop
+#   is passed again. The default is 360.
+#center: 0
+#   Stepper position of the center of the endstop pin. This is usually
+#   set with SET_A_AXIS_CHECK from the homing macro. The default is 0.
+#span:
+#   Width of the range around the center in which the endstop is
+#   triggered, as measured when homing from both sides. This is usually
+#   set with SET_A_AXIS_CHECK from the homing macro. The default is none
+#   (it must then be given with SET_A_AXIS_CHECK ENABLE=1).
+#hysteresis: 0.5
+#   How much further out the endstop releases than it triggers. The
+#   default is 0.5.
+#tolerance: 1.0
+#   Allowed deviation between the commanded and the observed position of
+#   the endstop pin. It must be smaller than the smallest step loss to
+#   detect (4 full steps, i.e. 3.6 on a 0.9 degree motor). The default
+#   is 1.0.
+#timing_tolerance: 0.0005
+#   Allowed delay (in seconds) of the endstop signal, for example due to
+#   contact bounce. The allowed deviation grows by this time multiplied
+#   with the speed of the axis. The default is 0.0005.
+#poll_time: 0.0001
+#   Interval (in seconds) at which the micro-controller samples the
+#   endstop pin. It limits the resolution of the check to poll_time
+#   multiplied with the speed of the axis. The default is 0.0001.
+#sample_time: 0.005
+#   Interval (in seconds) at which the micro-controller reports the
+#   endstop state. The default is 0.005.
+#pause_on_fault: True
+#   When set to True, a PAUSE is executed if a fault is detected while
+#   printing. The default is True.
+#fault_gcode:
+#   A list of G-Code commands to execute after a fault is detected (and
+#   after the pause, if enabled). See docs/Command_Templates.md for
+#   G-Code format. The default is to not run any G-Code commands.
+#log: False
+#   When set to True, every checked edge of the endstop signal is
+#   written to the log file. The default is False.
+```
+
 ## Custom heaters and sensors
 
 ### [verify_heater]

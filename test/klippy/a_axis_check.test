@@ -1,0 +1,26 @@
+# Test case for a_axis_check
+DICTIONARY linuxprocess.dict
+CONFIG a_axis_check.cfg
+
+# Query before the check is enabled
+QUERY_A_AXIS_CHECK
+
+# Enable the check on the "homed" stepper
+MANUAL_STEPPER STEPPER=stepper_a ENABLE=1
+MANUAL_STEPPER STEPPER=stepper_a SET_POSITION=0
+SET_A_AXIS_CHECK ENABLE=1 CENTER=0 SPAN=10 HYSTERESIS=0.8
+
+# Rotate as a g-code axis
+MANUAL_STEPPER STEPPER=stepper_a GCODE_AXIS=A
+G1 A720 F60000
+G1 A-90 F30000
+QUERY_A_AXIS_CHECK
+
+# Change parameters at run-time
+SET_A_AXIS_CHECK TOLERANCE=2 TIMING_TOLERANCE=0.002 LOG=1
+SET_A_AXIS_CHECK ENABLE=0
+SET_A_AXIS_CHECK ENABLE=1
+
+# Motor off disables the check
+M84
+QUERY_A_AXIS_CHECK

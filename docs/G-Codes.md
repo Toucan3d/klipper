@@ -68,6 +68,37 @@ follows the section names specified in the
 [printer configuration file](Config_Reference.md). Note that some
 modules are automatically loaded.
 
+### [a_axis_check]
+
+The following commands are available when an
+[a_axis_check config section](Config_Reference.md#a_axis_check) is
+enabled.
+
+#### SET_A_AXIS_CHECK
+`SET_A_AXIS_CHECK [ENABLE=<0|1>] [CENTER=<pos>] [SPAN=<width>]
+[HYSTERESIS=<value>] [TOLERANCE=<value>] [TIMING_TOLERANCE=<seconds>]
+[LOG=<0|1>]`: Enables or disables the step loss check and updates its
+parameters. `ENABLE=1` must be given after the monitored stepper is
+homed; it clears a previous fault and the statistics. `CENTER` is the
+stepper position of the center of the endstop pin and `SPAN` is the
+width of the range in which the endstop is triggered, both as measured
+by the homing macro. For example, a macro that homes from both sides,
+moves to the measured center and sets that position to zero would
+finish with `SET_A_AXIS_CHECK ENABLE=1 CENTER=0 SPAN={ccw_pos - cw_pos}`.
+The check is disabled automatically when the stepper is homed, when its
+motor is disabled and after a fault. `TOLERANCE=180` (half a period)
+never raises a fault, which is useful to only collect the statistics
+reported by `QUERY_A_AXIS_CHECK`. The changes are not written to the
+config file.
+
+#### QUERY_A_AXIS_CHECK
+`QUERY_A_AXIS_CHECK`: Reports whether the check is enabled, the current
+endstop state, the active parameters, the last fault and statistics of
+the checked edges since the check was enabled: the number of trigger and
+release edges and the smallest and largest deviation of each from the
+expected flank of the pin (negative values are inside the pin). Use
+these values to choose `tolerance`, `timing_tolerance` and `hysteresis`.
+
 ### [adxl345]
 
 The following commands are available when an
