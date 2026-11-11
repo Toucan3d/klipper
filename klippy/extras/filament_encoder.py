@@ -9,6 +9,9 @@ from . import bulk_sensor, pulse_counter
 DEFAULT_ENCODER_KEY = None
 WAIT_TIMEOUT = 2.
 FORCE_DELAY_BASE = 1.
+# Stall samples arrive in batches every 0.5 s (bulk_sensor.BATCH_INTERVAL)
+STALL_DELAY = 1.5
+MIN_PULSES = 4
 
 
 ######################################################################
@@ -27,10 +30,17 @@ class MonitorRun:
         self.status_timer = None
         self.log_file = None
         self.log_name = None
-        # Log rows waiting for the delayed load cell samples
+        # Log rows waiting for the delayed load cell and stall samples
         self.pending = collections.deque()
+        # Print time of each edge in the run, None where one sample held
+        # more than one edge and the single edge times are unknown
+        self.edge_times = []
     def is_started(self):
         return self.start_edges is not None
+    def in_run(self, print_time):
+        return (self.start_time is not None and not self.done
+                and print_time >= self.start_time
+                and (self.stop_time is None or print_time <= self.stop_time))
 
 
 ######################################################################
@@ -57,7 +67,16 @@ class FilamentEncoder:
         self.log_path = config.get('log_path', None)
         self.force_history = collections.deque()
         self.force_delay = 0.
+        # TMC stall data of the extruder motors, streamed during logged runs
+        self.stall_names = list(config.getlist('stall_steppers', (),
+                                               sep=','))
+        self.stall_interval = config.getfloat('stall_interval', 0.020,
+                                              minval=0.001)
+        self.stall_dumps = []
+        self.stall_cbs = []
+        self.stall_history = []
         # Sample state
+        self.last_edge_time = None
         self.history = collections.deque()
         self.base_count = None
         self.abs_base = self.rel_base = 0.
@@ -107,6 +126,17 @@ class FilamentEncoder:
             block = bulk_sensor.MAX_BULK_MSG_SIZE // 3
             self.force_delay = FORCE_DELAY_BASE + 2. * block / sps
             load_cell.add_client(self._load_cell_callback)
+        for name in self.stall_names:
+            dump = self.printer.lookup_object('tmc_stallguard ' + name, None)
+            if dump is None:
+                raise self.printer.config_error(
+                    "filament_encoder %s: no TMC driver with stall data for"
+                    " stepper '%s'" % (self.name, name))
+            index = len(self.stall_dumps)
+            self.stall_dumps.append(dump)
+            self.stall_cbs.append(
+                (lambda msg, i=index: self._stall_callback(i, msg)))
+            self.stall_history.append(collections.deque())
         if self.extruder_name is None:
             return
         extruder = self.printer.lookup_object(self.extruder_name, None)
@@ -125,13 +155,23 @@ class FilamentEncoder:
     def _counter_callback(self, print_time, count, count_time):
         # Called in the serial thread, hand over to the main thread
         self.reactor.register_async_callback(
-            (lambda e, t=print_time, c=count: self.handle_sample(t, c)))
-    def handle_sample(self, print_time, count):
+            (lambda e, t=print_time, c=count, ct=count_time:
+             self.handle_sample(t, c, ct)))
+    def handle_sample(self, print_time, count, count_time=None):
         if self.base_count is None:
             # The first report may contain an edge from the initial pin
             # level, it only sets the baseline
             self.base_count = count
         edges = count - self.base_count
+        if self.history and count_time is not None:
+            new_edges = edges - self.history[-1][1]
+            if new_edges > 0:
+                # count_time is the MCU time of the last edge
+                self.last_edge_time = count_time
+                for run in [self.run] + self.finishing:
+                    if run is not None and run.in_run(count_time):
+                        run.edge_times.append(
+                            count_time if new_edges == 1 else None)
         if self.extruder is not None:
             epos = self.extruder.find_past_position(print_time)
             if self.last_epos is not None:
@@ -250,6 +290,79 @@ class FilamentEncoder:
             return {'force_avg': None, 'force_min': None, 'force_max': None}
         return {'force_avg': total / count, 'force_min': fmin,
                 'force_max': fmax}
+    # Stall data handling
+    def _stall_callback(self, index, msg):
+        history = self.stall_history[index]
+        for row in msg.get('data', []):
+            if history and row[0] <= history[-1][0]:
+                continue
+            history.append((row[0], row[1], row[2]))
+        if history:
+            min_time = history[-1][0] - self.history_time
+            while len(history) > 2 and history[0][0] < min_time:
+                history.popleft()
+        for run in [self.run] + list(self.finishing):
+            if run is not None:
+                self._flush_log(run)
+                self._try_finish(run)
+        return self._stall_wanted()
+    def _stall_wanted(self):
+        return any(run is not None and not run.done
+                   and run.log_file is not None
+                   for run in [self.run] + self.finishing)
+    def _start_stall(self):
+        for dump, cb in zip(self.stall_dumps, self.stall_cbs):
+            if dump.has_client(cb):
+                continue
+            try:
+                dump.add_client(cb, self.stall_interval)
+            except self.printer.command_error as e:
+                self.gcode.respond_info("FLOW stall data unavailable: %s"
+                                        % (str(e),))
+    def stall_at(self, index, print_time):
+        # Newest (sg_result, cs_actual) at or before a print time
+        for sample_time, sg, cs in reversed(self.stall_history[index]):
+            if sample_time <= print_time:
+                return sg, cs
+        return None, None
+    def _stall_ready(self, print_time):
+        for dump, cb, history in zip(self.stall_dumps, self.stall_cbs,
+                                     self.stall_history):
+            if not dump.has_client(cb):
+                continue
+            if history and history[-1][0] >= print_time:
+                continue
+            if self.history and self.history[-1][0] - print_time > STALL_DELAY:
+                continue
+            return False
+        return True
+    def _stall_stats(self, start_time, stop_time):
+        stats = {}
+        for name, history in zip(self.stall_names, self.stall_history):
+            values = [sg for t, sg, cs in history
+                      if start_time <= t <= stop_time and sg >= 0]
+            stats[name] = {'samples': len(values),
+                           'sg_avg': (sum(values) / float(len(values))
+                                      if values else None),
+                           'sg_min': min(values) if values else None}
+        return stats
+    def _pulse_stats(self, run):
+        # Scatter of the time between full pulses (two edges), the SFS
+        # edges themselves are asymmetric
+        times = run.edge_times
+        durations = []
+        for i in range(len(times) - 2):
+            if None in (times[i], times[i + 1], times[i + 2]):
+                continue
+            durations.append(times[i + 2] - times[i])
+        if len(durations) < MIN_PULSES:
+            return {'pulse_cv': None, 'pulses': len(durations)}
+        mean = sum(durations) / len(durations)
+        var = sum((d - mean) ** 2 for d in durations) / len(durations)
+        return {'pulse_cv': 100. * math.sqrt(var) / mean,
+                'pulses': len(durations)}
+    def _data_ready(self, print_time):
+        return self._force_ready(print_time) and self._stall_ready(print_time)
     def _force_ready(self, print_time):
         # True once the load cell samples cover the print time, or when
         # they are overdue
@@ -297,10 +410,14 @@ class FilamentEncoder:
                 run.flow_max = flow
         if run.log_file is not None:
             vals = self._run_values(run, print_time)
-            row = "%.6f,%d,%.3f,%.3f,%.3f,%s" % (
+            edge_time = ""
+            if self.last_edge_time is not None:
+                edge_time = "%.6f" % (self.last_edge_time,)
+            row = "%.6f,%d,%.3f,%.3f,%.3f,%s,%s" % (
                 print_time, round(vals['edges']), vals['length'],
-                self.get_speed(), flow, self._fmt_csv(vals['commanded']))
-            if self.load_cell is None:
+                self.get_speed(), flow, self._fmt_csv(vals['commanded']),
+                edge_time)
+            if self.load_cell is None and not self.stall_dumps:
                 self._write_log(run, row + "\n")
             else:
                 run.pending.append((print_time, row))
@@ -310,7 +427,7 @@ class FilamentEncoder:
             return
         if self.history[-1][0] < run.stop_time:
             return
-        if self._force_ready(run.stop_time):
+        if self._data_ready(run.stop_time):
             self._finish_run(run)
     def _finish_run(self, run):
         self._flush_log(run, force=True)
@@ -327,6 +444,11 @@ class FilamentEncoder:
                   'flow_max': flow_max, 'commanded': vals['commanded'],
                   'ratio': vals['ratio']}
         result.update(self._run_force(run, run.stop_time))
+        result.update(self._pulse_stats(run))
+        result['stall'] = None
+        if self.stall_dumps:
+            result['stall'] = self._stall_stats(run.start_time,
+                                                run.stop_time)
         run.result = result
         run.done = True
         self.last_result = result
@@ -350,6 +472,12 @@ class FilamentEncoder:
                 self._fmt_num(result['force_avg']),
                 self._fmt_num(result['force_min']),
                 self._fmt_num(result['force_max']))
+        if result['pulse_cv'] is not None:
+            msg += " pulse_cv=%.1f%%" % (result['pulse_cv'],)
+        for name, stats in sorted((result['stall'] or {}).items()):
+            if stats['samples']:
+                msg += " sg[%s]=%.0f/%d" % (name, stats['sg_avg'],
+                                            stats['sg_min'])
         self.gcode.respond_info(msg)
     def _run_force(self, run, print_time):
         if self.load_cell is None or not run.is_started():
@@ -427,9 +555,12 @@ class FilamentEncoder:
                 os.makedirs(log_dir)
             run.log_file = open(path, 'w')
             header = ("print_time,edges,length_mm,speed_mm_s,flow_mm3_s,"
-                      "commanded_mm")
+                      "commanded_mm,edge_time")
             if self.load_cell is not None:
                 header += ",force_g,force_counts"
+            for name in self.stall_names:
+                short = re.sub(r'[^A-Za-z0-9]+', '_', name)
+                header += ",sg_%s,cs_%s" % (short, short)
             run.log_file.write(header + "\n")
             run.log_name = path
         except (IOError, OSError) as e:
@@ -444,18 +575,24 @@ class FilamentEncoder:
             self.gcode.respond_info("FLOW log error: %s" % (str(e),))
             self._close_log(run)
     def _flush_log(self, run, force=False):
-        # Write the waiting rows once the load cell samples cover them
+        # Write the waiting rows once the load cell and stall samples
+        # cover them
         pending = run.pending
         while pending and run.log_file is not None:
             print_time, row = pending[0]
-            if not force and not self._force_ready(print_time):
+            if not force and not self._data_ready(print_time):
                 break
             pending.popleft()
-            grams, counts = self.force_at(print_time)
-            if counts is not None:
-                counts = "%.0f" % (counts,)
-            self._write_log(run, "%s,%s,%s\n" % (
-                row, self._fmt_csv(grams), counts or ""))
+            if self.load_cell is not None:
+                grams, counts = self.force_at(print_time)
+                if counts is not None:
+                    counts = "%.0f" % (counts,)
+                row += ",%s,%s" % (self._fmt_csv(grams), counts or "")
+            for index in range(len(self.stall_dumps)):
+                sg, cs = self.stall_at(index, print_time)
+                row += ",%s,%s" % ("" if sg is None else "%d" % (sg,),
+                                   "" if cs is None else "%d" % (cs,))
+            self._write_log(run, row + "\n")
         if run.log_file is None:
             pending.clear()
     def _close_log(self, run):
@@ -520,6 +657,8 @@ class FilamentEncoder:
         self.run = run
         if do_log:
             self._open_log(run)
+            if run.log_file is not None and self.stall_dumps:
+                self._start_stall()
         if interval > 0.:
             run.status_timer = self.reactor.register_timer(
                 self._status_event,
@@ -546,6 +685,8 @@ class FilamentEncoder:
             return
         eventtime = self.reactor.monotonic()
         timeout = WAIT_TIMEOUT + self.force_delay
+        if self.stall_dumps:
+            timeout = max(timeout, WAIT_TIMEOUT + STALL_DELAY)
         deadline = eventtime + timeout
         while not run.done and eventtime < deadline:
             eventtime = self.reactor.pause(eventtime + self.sample_time)

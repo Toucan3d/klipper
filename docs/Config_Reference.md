@@ -5350,6 +5350,17 @@ mm_per_edge:
 #   the folder 'testdata' next to the folder of the Klipper log (for
 #   example ~/printer_data/testdata) if it exists, otherwise the
 #   folder of the Klipper log.
+#stall_steppers:
+#   Optional comma separated list of steppers with a TMC driver that
+#   reports stall data (for example 'extruder, extruder_stepper
+#   extruder1'). During runs started with FLOW_MONITOR_START LOG=1 the
+#   driver's SG_RESULT and CS_ACTUAL are read and recorded with the
+#   encoder data. The reads use the same bus as the steppers, so keep
+#   the rate low on a slow link. The default is to not record stall
+#   data.
+#stall_interval: 0.020
+#   Time in seconds between two stall reads of one driver. The
+#   default is 0.020.
 ```
 
 ### [tsl1401cl_filament_width_sensor]

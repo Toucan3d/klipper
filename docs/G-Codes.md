@@ -547,7 +547,11 @@ INTERVAL seconds (default 1.0, 0 disables the status lines). With
 With a `load_cell` configured the rows also have the columns `force_g`
 and `force_counts`, the load cell value interpolated to the print time
 of the row (`force_g` is empty until the load cell is calibrated and
-tared, `force_counts` holds the raw sensor value). A
+tared, `force_counts` holds the raw sensor value). The column
+`edge_time` holds the print time of the newest encoder edge, measured
+by the micro-controller. With `stall_steppers` configured each stepper
+adds the columns `sg_<stepper>` and `cs_<stepper>`, the newest
+SG_RESULT and CS_ACTUAL at the print time of the row. A
 second FLOW_MONITOR_START while a run is active ends the old run with
 a summary first. The command does not wait for the moves.
 
@@ -558,6 +562,9 @@ summary with length, edges, average, minimum and maximum flow and,
 when `extruder` is configured, the commanded length and the ratio of
 measured to commanded length. With a `load_cell` configured the
 summary also has the average, minimum and maximum force in grams.
+`pulse_cv` is the scatter of the time between full encoder pulses (two
+edges) in percent, a rising value shows that the filament slips. With
+`stall_steppers` the summary has `sg[<stepper>]=<average>/<minimum>`.
 Without `WAIT=1` the command returns
 immediately and the summary follows once the moves are done. With
 `WAIT=1` the command waits for the moves and the summary, so a

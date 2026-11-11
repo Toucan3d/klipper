@@ -110,6 +110,7 @@ class StubPrinter:
         return {'log_file': os.path.join(self.log_dir, 'klippy.log')}
     def config_error(self, msg):
         return StubError(msg)
+    command_error = StubError
 
 class StubConfig:
     def __init__(self, printer, name, opts):
@@ -122,8 +123,13 @@ class StubConfig:
         return self.name
     def get(self, name, default=None):
         return self.opts.get(name, default)
-    def getfloat(self, name, default=None, above=None):
+    def getfloat(self, name, default=None, above=None, minval=None):
         return float(self.opts.get(name, default))
+    def getlist(self, name, default=None, sep=','):
+        val = self.opts.get(name)
+        if val is None:
+            return default
+        return [p.strip() for p in val.split(sep) if p.strip()]
 
 class StubCounter:
     def __init__(self, printer, pin, sample_time, poll_time):
@@ -146,6 +152,32 @@ class StubLoadCell:
         for cb in self.clients:
             cb({'data': rows, 'errors': 0, 'overflows': 0})
 
+class StubStallDump:
+    # Stands in for tmc.TMCStallguardDump
+    def __init__(self):
+        self.clients = []
+        self.min_interval = None
+    def add_client(self, cb, min_interval=0.):
+        self.clients.append(cb)
+        self.min_interval = min_interval
+    def has_client(self, cb):
+        return cb in self.clients
+    def send(self, rows):
+        for cb in list(self.clients):
+            if not cb({'data': rows}):
+                self.clients.remove(cb)
+
+def sg_of(t):
+    return int(400 - 20 * t)
+
+def feed_stall(dump, t0, t1, dt=0.02):
+    rows = []
+    t = t0
+    while t <= t1 + 1e-9:
+        rows.append((t, sg_of(t), 16))
+        t += dt
+    dump.send(rows)
+
 def force_of(t):
     return 100. + 10. * t
 
@@ -163,7 +195,8 @@ def feed_force(lc, t0, t1, block=12, calibrated=True):
     if rows:
         lc.send(rows)
 
-def make_encoder(extruder=True, load_cell=False, log_path=None):
+def make_encoder(extruder=True, load_cell=False, log_path=None,
+                 stall=False):
     # Log folder inside a private folder, like printer_data/logs
     log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
     os.mkdir(log_dir)
@@ -176,6 +209,10 @@ def make_encoder(extruder=True, load_cell=False, log_path=None):
     if load_cell:
         opts['load_cell'] = 'lc'
         printer.objects['load_cell lc'] = StubLoadCell()
+    if stall:
+        opts['stall_steppers'] = 'extruder, extruder_stepper e1'
+        printer.objects['tmc_stallguard extruder'] = StubStallDump()
+        printer.objects['tmc_stallguard extruder_stepper e1'] =             StubStallDump()
     orig = pulse_counter.MCU_counter
     pulse_counter.MCU_counter = StubCounter
     try:
@@ -342,7 +379,7 @@ def test_monitor_with_load_cell():
     worst = 0.
     for row in rows[1:]:
         cols = row.split(',')
-        t, grams = float(cols[0]), float(cols[6])
+        t, grams = float(cols[0]), float(cols[7])
         worst = max(worst, abs(grams - force_of(t)))
     check(worst < 0.01, "csv force synced to print time (err %.4f)"
           % (worst,))
@@ -370,11 +407,86 @@ def test_load_cell_overdue_and_uncalibrated():
     rows = open(run.log_name).read().splitlines()[1:]
     early = [r for r in rows if float(r.split(',')[0]) <= 1.9]
     late = [r for r in rows if float(r.split(',')[0]) > 1.9]
-    check(early and all(r.split(',')[6] == '' and r.split(',')[7] != ''
+    check(early and all(r.split(',')[7] == '' and r.split(',')[8] != ''
                         for r in early),
           "uncalibrated rows keep raw counts")
     check(late and all(r.endswith(',,') for r in late),
           "rows without load cell samples have empty force")
+
+def feed_edges(enc, t0, t1, period, jitter=0.):
+    # One edge every period seconds with exact edge times, samples at 10 ms
+    count = 0
+    next_edge = t0 + period
+    last_edge = None
+    t = t0
+    k = 0
+    while t <= t1 + 1e-9:
+        while next_edge <= t:
+            count += 1
+            last_edge = next_edge
+            k += 1
+            # Asymmetric halves like the SFS, 60/40
+            half = period * (1.2 if k % 2 else 0.8)
+            next_edge += half + jitter * (1 if k % 4 == 0 else 0)
+        enc.handle_sample(t, count, last_edge)
+        t += 0.010
+    return count
+
+def test_stall_and_edge_timing():
+    printer, enc = make_encoder(stall=True)
+    d1 = printer.objects['tmc_stallguard extruder']
+    d2 = printer.objects['tmc_stallguard extruder_stepper e1']
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='stall', LOG='1', INTERVAL='0')
+    check(d1.clients and d2.clients and d1.min_interval == 0.02,
+          "logged run starts both stall streams at 20 ms")
+    toolhead.flush(2.005)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(5.005)
+    run = enc.finishing[0]
+    feed_edges(enc, 1., 6., 0.05)
+    check(not run.done, "run waits for the stall samples")
+    feed_stall(d1, 1., 6.)
+    check(not run.done, "run waits for the second motor")
+    feed_stall(d2, 1., 6.)
+    res = enc.last_result
+    check(run.done and res is not None, "run done once stall covers stop")
+    s1 = res['stall']['extruder']
+    check(s1['samples'] > 140 and s1['sg_min'] == sg_of(5.0)
+          and abs(s1['sg_avg'] - sg_of(3.5)) < 1.5,
+          "stall stats inside the run (avg %.1f, min %d)"
+          % (s1['sg_avg'], s1['sg_min']))
+    check(res['pulse_cv'] is not None and res['pulse_cv'] < 0.5,
+          "even full pulses give a low pulse_cv (%.3f %%) despite"
+          " asymmetric edges" % (res['pulse_cv'],))
+    check("pulse_cv=" in gcode.messages[-1]
+          and "sg[extruder]=" in gcode.messages[-1], "summary has stall")
+    rows = open(run.log_name).read().splitlines()
+    check(rows[0].endswith(",edge_time,sg_extruder,cs_extruder,"
+                           "sg_extruder_stepper_e1,cs_extruder_stepper_e1"),
+          "csv header has edge time and stall columns")
+    cols = rows[-1].split(',')
+    t = float(cols[0])
+    check(float(cols[6]) <= t and int(cols[7]) == sg_of(
+        math.floor(t / 0.02 + 1e-6) * 0.02) and cols[8] == '16',
+          "csv row holds the last edge time and stall sample")
+    feed_stall(d1, 6.02, 6.5)
+    feed_stall(d2, 6.02, 6.5)
+    check(not d1.clients and not d2.clients,
+          "stall streams stop after the logged run")
+    # Uneven pulses give a high scatter
+    printer, enc = make_encoder(stall=True)
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='slip', INTERVAL='0')
+    check(not printer.objects['tmc_stallguard extruder'].clients,
+          "run without LOG does not stream stall data")
+    toolhead.flush(1.005)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(4.005)
+    feed_edges(enc, 1., 5., 0.05, jitter=0.03)
+    res = enc.last_result
+    check(res['pulse_cv'] > 10., "slipping pulses raise pulse_cv (%.1f %%)"
+          % (res['pulse_cv'],))
 
 def run_logged(printer, enc):
     printer.gcode.run('FLOW_MONITOR_START', LABEL='dir', LOG='1',
@@ -402,7 +514,8 @@ def main():
              test_32bit_wrap, test_standstill, test_monitor_between_samples,
              test_restart_and_stop_without_run, test_reset_and_query,
              test_monitor_with_load_cell,
-             test_load_cell_overdue_and_uncalibrated, test_log_dir]
+             test_load_cell_overdue_and_uncalibrated, test_log_dir,
+             test_stall_and_edge_timing]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()

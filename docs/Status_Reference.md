@@ -187,8 +187,11 @@ objects:
   `extruder`, the force values are None without a calibrated and tared
   `load_cell`.
 - `last_result`: The result of the last finished run, the same fields
-  plus `edges`, `flow_min`, `flow_max` and `duration`, or None before
-  the first run.
+  plus `edges`, `flow_min`, `flow_max`, `duration`, `pulse_cv` (%,
+  scatter of the time between full encoder pulses, None with fewer
+  than 4 pulses), `pulses` and `stall` (None without
+  `stall_steppers`, otherwise a dict per stepper with `samples`,
+  `sg_avg` and `sg_min`), or None before the first run.
 
 ## filament_switch_sensor
 
