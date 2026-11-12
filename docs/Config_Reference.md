@@ -3442,6 +3442,63 @@ load_cell:
 #   is 0.5.
 ```
 
+### [json_sensor]
+
+Reads a numeric value from a small JSON file that another process
+writes, for example a measurement service outside Klipper, and shows
+it as Klipper status (see the
+[status reference](Status_Reference.md#json_sensor)). The writer
+should replace the file atomically (write a temporary file, then
+rename it). Missing, stale or invalid data only changes the reported
+state; the module never shuts down the printer and Klipper starts
+without the file. The values are for display, not for synced
+measurements.
+
+```
+[json_sensor my_sensor]
+path:
+#   Path of the JSON file (a JSON object). A relative path is relative
+#   to the folder of the printer config file. This parameter must be
+#   provided.
+#field: value
+#   Name of the numeric field to show. The default is 'value'.
+#state_field: state
+#   Optional field with a state text of the writer. The default is
+#   'state'; without it the state is 'ok' while the file is valid.
+#time_field: unix_time
+#   Field with the Unix time the writer wrote the file. Without it the
+#   file modification time is used. The default is 'unix_time'.
+#rate_field: sps
+#   Optional field reported as sps. The default is 'sps'.
+#recording_field: recording
+#   Optional field reported as recording (true when it is set and not
+#   empty). The default is 'recording'.
+#max_age: 2.0
+#   Data older than this many seconds is reported as state 'stale'
+#   without a value. 0 disables the check. The default is 2.0.
+#interval: 0.25
+#   Time in seconds between two reads of the file. The default is
+#   0.25.
+```
+
+### JSON sensor value
+
+Shows the value of a [json_sensor](#json_sensor) relative to its zero
+like a temperature, with graph and history in the front ends. The
+reported number is (value - zero) x scale, 0 while the sensor has no
+valid value. Values outside min_temp and max_temp are reported, they
+never shut down the printer.
+
+```
+sensor_type: json_sensor
+sensor:
+#   Name of the [json_sensor] section (for example 'my_sensor' for
+#   [json_sensor my_sensor]). This parameter must be provided.
+#scale: 1.0
+#   Factor applied to the difference from the zero. The default is
+#   1.0.
+```
+
 ## Fans
 
 ### [fan]

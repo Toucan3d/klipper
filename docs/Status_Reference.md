@@ -314,6 +314,21 @@ object is available if any heater is defined):
   available to read, a temperature monitor may not be available and
   will return null in such case.
 
+## json_sensor
+
+The following information is available in
+[json_sensor some_name](Config_Reference.md#json_sensor) objects:
+- `state`: The state text from the file, 'ok' when the file has none,
+  'stale' when the data is older than `max_age`, 'missing' when the
+  file can not be read or 'invalid' when it is no JSON object.
+- `value`: The numeric field, or None without a valid number.
+- `zero`: The zero set by JSON_SENSOR_TARE, or the first valid value
+  after the start.
+- `delta`: `value` minus `zero`, or None.
+- `sps`: The rate field of the file, or None.
+- `age_s`: Seconds since the file was written, or None.
+- `recording`: True when the recording field of the file is set.
+
 ## idle_timeout
 
 The following information is available in the

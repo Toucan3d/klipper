@@ -887,6 +887,19 @@ above the supplied MINIMUM and/or at or below the supplied MAXIMUM.
 [TARGET=<target_temperature>]`: Sets the target temperature for a
 heater. If a target temperature is not supplied, the target is 0.
 
+### [json_sensor]
+
+The following command is available when a
+[json_sensor config section](Config_Reference.md#json_sensor) is
+enabled.
+
+#### JSON_SENSOR_TARE
+`JSON_SENSOR_TARE SENSOR=<name>`: Sets the zero of the sensor to its
+current value, so `delta` and the [JSON sensor
+value](Config_Reference.md#json-sensor-value) start at 0. Until the
+first JSON_SENSOR_TARE the zero is the first valid value after
+Klipper starts. Fails when the sensor has no valid value.
+
 ### HCU V0.3 heater
 
 The following commands are available for a heater with

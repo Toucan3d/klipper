@@ -1,0 +1,7 @@
+# Test case for json_sensor
+DICTIONARY stm32f446.dict
+CONFIG json_sensor.cfg
+
+_CHECK_JSON_SENSOR
+JSON_SENSOR_TARE SENSOR=fixed
+_CHECK_JSON_SENSOR
