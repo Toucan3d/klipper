@@ -152,6 +152,25 @@ class StubLoadCell:
         for cb in self.clients:
             cb({'data': rows, 'errors': 0, 'overflows': 0})
 
+class StubStreamSource:
+    # A host module that rebuilds sample times of a USB stream: rate on
+    # itself, its own delivery delay and a sync report
+    def __init__(self):
+        self.clients = []
+        self.report_calls = []
+    def add_client(self, cb):
+        self.clients.append(cb)
+    def get_samples_per_second(self):
+        return 500.
+    def get_max_delay(self):
+        return 0.05
+    def get_sync_report(self, start, stop):
+        self.report_calls.append((start, stop))
+        return {'jitter_rms_s': 0.0002, 'dropped': 0, 'gaps': []}
+    def send(self, rows):
+        for cb in self.clients:
+            cb({'data': rows})
+
 class StubStallDump:
     # Stands in for tmc.TMCStallguardDump
     def __init__(self):
@@ -652,6 +671,43 @@ def test_side_files_and_anchors():
           and meta['columns'][-1] == "a_vel_deg_s",
           "meta file describes the run")
 
+def test_stream_force_source():
+    log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
+    os.mkdir(log_dir)
+    printer = StubPrinter(log_dir)
+    src = StubStreamSource()
+    printer.objects['eddy_stream nozzle'] = src
+    opts = {'pin': 'PG13', 'mm_per_edge': MM_PER_EDGE,
+            'load_cell': 'eddy_stream nozzle'}
+    orig = pulse_counter.MCU_counter
+    pulse_counter.MCU_counter = StubCounter
+    try:
+        enc = filament_encoder.FilamentEncoder(
+            StubConfig(printer, 'filament_encoder sfs', opts))
+    finally:
+        pulse_counter.MCU_counter = orig
+    printer.send_event("klippy:ready")
+    check(enc.force_sps == 500. and abs(enc.force_delay - 1.05) < 1e-9,
+          "stream source gives its rate and delivery delay")
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='eddy', LOG='1', INTERVAL='0')
+    run = enc.run
+    toolhead.flush(1.005)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(2.005)
+    feed(enc, 1., 2.5, SPEED)
+    rows = [[1. + i * 0.002, 50., 5000 + i] for i in range(800)]
+    src.send(rows)
+    check(run.done, "run done with the stream samples")
+    force = open(run.log_name[:-4] + "_force.csv").read().splitlines()
+    check(len(force) - 1 == 500, "all 500 SPS samples of the run in the"
+          " force file (%d)" % (len(force) - 1,))
+    meta = json.load(open(run.log_name[:-4] + "_meta.json"))
+    check(meta['force_sync'] == {'jitter_rms_s': 0.0002, 'dropped': 0,
+                                 'gaps': []}
+          and src.report_calls[-1] == (1.005, 2.005),
+          "meta holds the sync report of the run")
+
 def run_logged(printer, enc):
     printer.gcode.run('FLOW_MONITOR_START', LABEL='dir', LOG='1',
                       INTERVAL='0')
@@ -680,7 +736,7 @@ def main():
              test_monitor_with_load_cell,
              test_load_cell_overdue_and_uncalibrated, test_log_dir,
              test_stall_and_edge_timing, test_extra_columns,
-             test_side_files_and_anchors]
+             test_side_files_and_anchors, test_stream_force_source]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()

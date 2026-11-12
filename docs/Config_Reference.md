@@ -5347,9 +5347,13 @@ mm_per_edge:
 #load_cell:
 #   Optional name of a [load_cell] section (for example 'loadcell'
 #   for [load_cell loadcell]), or the full name of another object with
-#   the same client interface (add_client() and
-#   get_sensor().get_samples_per_second()). Its force is recorded in
-#   FLOW_MONITOR runs, synced to the encoder by print time. The load cell sends
+#   the same client interface: add_client() and
+#   get_samples_per_second() on the object or on its get_sensor().
+#   Such an object may also offer get_max_delay() (seconds until the
+#   samples of a print time have arrived) and get_sync_report(start,
+#   stop) (timestamp quality of a run, stored as force_sync in the meta
+#   file of the run). Its force is recorded in FLOW_MONITOR runs,
+#   synced to the encoder by print time. The load cell sends
 #   its samples in blocks (12 samples, so about 1.2 seconds at 10
 #   samples per second), so log rows and the run summary are delayed
 #   until the samples of that time have arrived. The default is to

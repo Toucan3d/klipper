@@ -185,24 +185,36 @@ class FilamentEncoder:
                                                 DEFAULT_ENCODER_KEY, func)
     def _handle_ready(self):
         if self.load_cell_name is not None:
-            # Any object with add_client(cb) and
-            # get_sensor().get_samples_per_second() works as force source,
-            # cb gets {'data': [[print_time, grams, counts, ...], ...]}
+            # Force source: a [load_cell] or any object with add_client(cb)
+            # and get_samples_per_second() (on itself or on get_sensor()).
+            # cb gets {'data': [[print_time, grams, counts, ...], ...]}.
+            # Optional: get_max_delay() is the time in seconds until the
+            # samples of a print time have arrived, and
+            # get_sync_report(start, stop) describes the timestamp quality
+            # of a run for the meta file.
             obj_name = self.load_cell_name
             if ' ' not in obj_name:
                 obj_name = 'load_cell ' + obj_name
             load_cell = self.printer.lookup_object(obj_name, None)
+            rate_obj = load_cell
+            if hasattr(load_cell, 'get_sensor'):
+                rate_obj = load_cell.get_sensor()
             if (load_cell is None or not hasattr(load_cell, 'add_client')
-                    or not hasattr(load_cell, 'get_sensor')):
+                    or not hasattr(rate_obj, 'get_samples_per_second')):
                 raise self.printer.config_error(
                     "filament_encoder %s: unknown load_cell '%s'"
                     % (self.name, self.load_cell_name))
             self.load_cell = load_cell
-            # Samples arrive in blocks, wait for at most two blocks
-            sps = load_cell.get_sensor().get_samples_per_second()
+            sps = rate_obj.get_samples_per_second()
             self.force_sps = sps
-            block = bulk_sensor.MAX_BULK_MSG_SIZE // 3
-            self.force_delay = FORCE_DELAY_BASE + 2. * block / sps
+            if hasattr(load_cell, 'get_max_delay'):
+                self.force_delay = (FORCE_DELAY_BASE
+                                    + load_cell.get_max_delay())
+            else:
+                # Bulk sensor samples arrive in blocks, wait for at most
+                # two blocks
+                block = bulk_sensor.MAX_BULK_MSG_SIZE // 3
+                self.force_delay = FORCE_DELAY_BASE + 2. * block / sps
             load_cell.add_client(self._load_cell_callback)
         if self.mosfet_name is not None:
             mosfet = self.printer.lookup_object(self.mosfet_name, None)
@@ -774,6 +786,17 @@ class FilamentEncoder:
         run.anchors.append({'event': event, 'monotonic': eventtime,
                             'unix_time': unix_time,
                             'print_time': print_time})
+    def _force_sync_report(self, run):
+        # Timestamp quality of the force samples in the run, from sources
+        # that rebuild sample times on the host
+        report = getattr(self.load_cell, 'get_sync_report', None)
+        if report is None or run.start_time is None:
+            return None
+        try:
+            return report(run.start_time, run.stop_time)
+        except Exception:
+            logging.exception("filament_encoder: force sync report failed")
+            return None
     def _write_meta(self, run):
         if run.base_name is None:
             return
@@ -802,6 +825,7 @@ class FilamentEncoder:
             'extruder': self.extruder_name,
             'mosfet_sensor': self.mosfet_name,
             'a_stepper': self.a_stepper_name,
+            'force_sync': self._force_sync_report(run),
             'result': run.result}
         try:
             with open(run.base_name + "_meta.json", 'w') as f:
