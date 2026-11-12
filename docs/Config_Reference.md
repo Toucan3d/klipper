@@ -58,6 +58,12 @@ serial:
 #   sending a Klipper command to the micro-controller so that it can
 #   reset itself. The default is 'arduino' if the micro-controller
 #   communicates over a serial port, 'command' otherwise.
+#ignore_deprecated_features:
+#   Comma separated list of firmware features (for example
+#   STEPPER_STEP_BOTH_EDGE) whose "MCU has deprecated code" note is not
+#   shown at startup. Only use it for a micro-controller whose firmware
+#   can not be rebuilt from the current code; the note is still written
+#   to the log. The default is to show all notes.
 ```
 
 ### [mcu my_extra_mcu]

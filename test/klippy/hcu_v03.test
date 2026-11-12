@@ -4,6 +4,9 @@
 DICTIONARY stm32f446.dict hcu=hcu_v03.dict
 CONFIG hcu_v03.cfg
 
+# The old firmware note is suppressed by ignore_deprecated_features
+_CHECK_NO_MCU_DEPRECATION
+
 # Heater target goes to the HCU firmware
 M104 S240
 G4 P500

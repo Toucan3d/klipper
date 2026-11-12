@@ -1309,6 +1309,9 @@ class MCU:
         self._config_helper = MCUConfigHelper(self, self._conn_helper)
         self._stats_helper = MCUStatsHelper(self, self._conn_helper)
         printer.load_object(config, "error_mcu")
+        # Deprecation notes for firmware that can not be rebuilt
+        self._ignored_deprecations = config.getlist(
+            'ignore_deprecated_features', (), sep=',')
         # Alter time reporting when debugging
         if self.is_fileoutput():
             def dummy_estimated_print_time(eventtime):
@@ -1320,6 +1323,8 @@ class MCU:
         return self._printer
     def is_fileoutput(self):
         return self._printer.get_start_args().get('debugoutput') is not None
+    def is_deprecation_ignored(self, feature):
+        return feature in self._ignored_deprecations
     # MCU Configuration wrappers
     def setup_pin(self, pin_type, pin_params):
         return self._config_helper.setup_pin(pin_type, pin_params)

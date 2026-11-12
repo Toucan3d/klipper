@@ -531,6 +531,11 @@ class PrinterConfig:
         self._add_deprecated(res)
     def deprecate_mcu_code(self, mcu, feature, msg=None):
         mcu_name = mcu.get_name()
+        is_ignored = getattr(mcu, 'is_deprecation_ignored', None)
+        if is_ignored is not None and is_ignored(feature):
+            logging.info("MCU '%s' is missing feature '%s', note suppressed"
+                         " by ignore_deprecated_features", mcu_name, feature)
+            return
         if msg is None:
             vhost = self.printer.start_args['software_version']
             vmcu = mcu.get_status()['mcu_version']
