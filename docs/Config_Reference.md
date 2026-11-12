@@ -5340,12 +5340,16 @@ mm_per_edge:
 #   default is 60.
 #extruder:
 #   Optional extruder (for example 'extruder') whose commanded travel
-#   is compared with the measured length in FLOW_MONITOR runs. The
-#   default is to not compare.
+#   is compared with the measured length in FLOW_MONITOR runs. With an
+#   extruder the logged rows also hold its commanded velocity and the
+#   temperature, target and power of its heater. The default is to not
+#   compare.
 #load_cell:
 #   Optional name of a [load_cell] section (for example 'loadcell'
-#   for [load_cell loadcell]). Its force is recorded in FLOW_MONITOR
-#   runs, synced to the encoder by print time. The load cell sends
+#   for [load_cell loadcell]), or the full name of another object with
+#   the same client interface (add_client() and
+#   get_sensor().get_samples_per_second()). Its force is recorded in
+#   FLOW_MONITOR runs, synced to the encoder by print time. The load cell sends
 #   its samples in blocks (12 samples, so about 1.2 seconds at 10
 #   samples per second), so log rows and the run summary are delayed
 #   until the samples of that time have arrived. The default is to
@@ -5367,6 +5371,15 @@ mm_per_edge:
 #stall_interval: 0.020
 #   Time in seconds between two stall reads of one driver. The
 #   default is 0.020.
+#mosfet_sensor:
+#   Optional full name of a temperature object (for example
+#   'temperature_sensor Transistors') whose temperature is logged in
+#   the column mosfet_c. The default is to not log it.
+#a_stepper:
+#   Optional full name of a manual_stepper (for example
+#   'manual_stepper stepper_a') whose commanded position and velocity
+#   are logged in the columns a_pos_deg and a_vel_deg_s while it is
+#   registered as G-code axis. The default is to not log it.
 ```
 
 ### [tsl1401cl_filament_width_sensor]

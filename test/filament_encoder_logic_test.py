@@ -6,7 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
 # Run with: python3 test/filament_encoder_logic_test.py
-import math, os, sys, tempfile
+import json, math, os, sys, tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', 'klippy'))
@@ -195,8 +195,61 @@ def feed_force(lc, t0, t1, block=12, calibrated=True):
     if rows:
         lc.send(rows)
 
+class StubTrapq:
+    # Commanded (position, velocity) from a function of the print time
+    def __init__(self, func):
+        self.func = func
+    def state(self, print_time):
+        return self.func(print_time)
+
+# The real trapq_state needs the compiled chelper
+filament_encoder.trapq_state = lambda trapq, t: trapq.state(t)
+
+def e_state(t):
+    return SPEED * t, SPEED
+
+class StubHeater:
+    # Readings every 0.1 s, temperature 200 + t
+    def __init__(self):
+        self.last_temp = self.last_temp_time = 0.
+        self.target_temp = 210.
+        self.last_pwm_value = 0.25
+    def read(self, t):
+        self.last_temp_time = t
+        self.last_temp = 200. + t
+
+class StubHeatedExtruder(StubExtruder):
+    def __init__(self):
+        StubExtruder.__init__(self)
+        self.heater = StubHeater()
+        self.trapq = StubTrapq(e_state)
+    def get_heater(self):
+        return self.heater
+    def get_trapq(self):
+        return self.trapq
+
+class StubSensor:
+    def __init__(self, temp):
+        self.temp = temp
+    def get_status(self, eventtime):
+        return {'temperature': self.temp}
+
+class StubManualStepper:
+    # A axis turning at 90 deg/s, registered as G-code axis when gcode_id
+    def __init__(self):
+        self.gcode_id = None
+        self.trapq = StubTrapq(lambda t: (90. * t, 90.))
+    def get_trapq(self):
+        return self.trapq
+    def get_axis_gcode_id(self):
+        return self.gcode_id
+
+class StubMCU:
+    def estimated_print_time(self, eventtime):
+        return eventtime + 100.
+
 def make_encoder(extruder=True, load_cell=False, log_path=None,
-                 stall=False):
+                 stall=False, extras=False, force_name=None):
     # Log folder inside a private folder, like printer_data/logs
     log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
     os.mkdir(log_dir)
@@ -206,13 +259,22 @@ def make_encoder(extruder=True, load_cell=False, log_path=None,
         opts['log_path'] = log_path
     if extruder:
         opts['extruder'] = 'extruder'
+    if extras:
+        printer.objects['extruder'] = StubHeatedExtruder()
+        printer.objects['temperature_sensor Transistors'] = StubSensor(31.5)
+        printer.objects['manual_stepper stepper_a'] = StubManualStepper()
+        printer.objects['mcu'] = StubMCU()
+        opts['mosfet_sensor'] = 'temperature_sensor Transistors'
+        opts['a_stepper'] = 'manual_stepper stepper_a'
     if load_cell:
-        opts['load_cell'] = 'lc'
-        printer.objects['load_cell lc'] = StubLoadCell()
+        opts['load_cell'] = force_name or 'lc'
+        obj_name = force_name or 'load_cell lc'
+        printer.objects[obj_name] = StubLoadCell()
     if stall:
         opts['stall_steppers'] = 'extruder, extruder_stepper e1'
         printer.objects['tmc_stallguard extruder'] = StubStallDump()
-        printer.objects['tmc_stallguard extruder_stepper e1'] =             StubStallDump()
+        printer.objects['tmc_stallguard extruder_stepper e1'] = (
+            StubStallDump())
     orig = pulse_counter.MCU_counter
     pulse_counter.MCU_counter = StubCounter
     try:
@@ -374,7 +436,7 @@ def test_monitor_with_load_cell():
           "length unchanged with load cell")
     check("force_avg=" in gcode.messages[-1], "summary has force")
     rows = open(run.log_name).read().splitlines()
-    check(rows[0].endswith(",force_g,force_counts"), "csv force columns")
+    check(",force_g,force_counts" in rows[0], "csv force columns")
     check(290 <= len(rows) - 1 <= 301, "csv has %d rows" % (len(rows) - 1))
     worst = 0.
     for row in rows[1:]:
@@ -462,8 +524,8 @@ def test_stall_and_edge_timing():
     check("pulse_cv=" in gcode.messages[-1]
           and "sg[extruder]=" in gcode.messages[-1], "summary has stall")
     rows = open(run.log_name).read().splitlines()
-    check(rows[0].endswith(",edge_time,sg_extruder,cs_extruder,"
-                           "sg_extruder_stepper_e1,cs_extruder_stepper_e1"),
+    check((",edge_time,sg_extruder,cs_extruder,"
+           "sg_extruder_stepper_e1,cs_extruder_stepper_e1") in rows[0],
           "csv header has edge time and stall columns")
     cols = rows[-1].split(',')
     t = float(cols[0])
@@ -487,6 +549,108 @@ def test_stall_and_edge_timing():
     res = enc.last_result
     check(res['pulse_cv'] > 10., "slipping pulses raise pulse_cv (%.1f %%)"
           % (res['pulse_cv'],))
+
+def feed_heated(enc, t0, t1, speed):
+    # Encoder samples at 10 ms and heater readings at 100 ms
+    heater = enc.heater
+    edge_rate = speed / MM_PER_EDGE
+    t = t0
+    k = 0
+    while t <= t1 + 1e-9:
+        if k % 10 == 0:
+            heater.read(t)
+        enc.counter.callback(t, int((t - t0) * edge_rate), t)
+        t += 0.010
+        k += 1
+
+def test_extra_columns():
+    printer, enc = make_encoder(extras=True)
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='extra', LOG='1', INTERVAL='0')
+    run = enc.run
+    toolhead.flush(1.005)
+    feed_heated(enc, 1., 2., SPEED)
+    enc.heater.target_temp = 230.
+    enc.heater.last_pwm_value = 0.5
+    printer.objects['temperature_sensor Transistors'].temp = 33.
+    printer.objects['manual_stepper stepper_a'].gcode_id = 'A'
+    feed_heated(enc, 2.01, 2.9, SPEED)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(3.505)
+    feed_heated(enc, 2.91, 4.2, SPEED)
+    check(run.done, "run with heater rows finished")
+    rows = [r.split(',') for r in open(run.log_name).read().splitlines()]
+    head = rows[0]
+    check(head[:7] == ["print_time", "edges", "length_mm", "speed_mm_s",
+                       "flow_mm3_s", "commanded_mm", "edge_time"]
+          and head[7:] == ["e_cmd_vel_mm_s", "nozzle_c", "target_c",
+                           "heater_power", "mosfet_c", "a_pos_deg",
+                           "a_vel_deg_s"],
+          "new columns appended after the old ones")
+    col = dict((name, i) for i, name in enumerate(head))
+    worst = 0.
+    for r in rows[1:]:
+        t = float(r[0])
+        worst = max(worst, abs(float(r[col['nozzle_c']]) - (200. + t)))
+    check(worst < 0.005, "nozzle_c interpolated between the 0.1 s"
+          " readings (err %.4f)" % (worst,))
+    first = [r for r in rows[1:] if float(r[0]) < 1.995][-1]
+    last = [r for r in rows[1:] if float(r[0]) > 2.5][-1]
+    check(first[col['target_c']] == "210.0"
+          and last[col['target_c']] == "230.0"
+          and last[col['heater_power']] == "0.5000",
+          "target and power held as steps")
+    check(first[col['mosfet_c']] == "31.50"
+          and last[col['mosfet_c']] == "33.00", "mosfet_c")
+    check(first[col['a_pos_deg']] == "" and first[col['a_vel_deg_s']] == "",
+          "A axis empty while it is no G-code axis")
+    t = float(last[0])
+    check(abs(float(last[col['a_pos_deg']]) - 90. * t) < 1e-3
+          and last[col['a_vel_deg_s']] == "90.000",
+          "A axis position and velocity at the row time")
+    check(abs(float(last[col['e_cmd_vel_mm_s']]) - SPEED) < 1e-3,
+          "commanded extruder velocity")
+
+def test_side_files_and_anchors():
+    printer, enc = make_encoder(load_cell=True, extras=True,
+                                force_name='eddy_force nozzle')
+    lc = printer.objects['eddy_force nozzle']
+    check(enc.load_cell is lc, "force source given by its full object name")
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='side', LOG='1', INTERVAL='0')
+    run = enc.run
+    base = run.log_name[:-4]
+    toolhead.flush(2.005)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(5.005)
+    feed_edges(enc, 1., 6., 0.05)
+    feed_force(lc, 1., 6.)
+    res = enc.last_result
+    check(run.done and res is not None, "run finished")
+    force = open(base + "_force.csv").read().splitlines()
+    check(force[0] == "print_time,force_counts,force_g", "force file header")
+    times = [float(r.split(',')[0]) for r in force[1:]]
+    check(len(times) == 30 and abs(times[0] - 2.1) < 1e-6
+          and abs(times[-1] - 5.0) < 1e-6
+          and times == sorted(set(times)),
+          "every native force sample of the run, once (%d)" % (len(times),))
+    edges = [r.split(',') for r in
+             open(base + "_edges.csv").read().splitlines()[1:]]
+    check(sum(int(n) for t, n in edges) == len(run.edge_times)
+          and all(2.005 <= float(t) <= 5.005 for t, n in edges),
+          "edge file holds the edge times of the run")
+    meta = json.load(open(base + "_meta.json"))
+    events = [a['event'] for a in meta['anchors']]
+    check(events == ['open', 'start', 'close']
+          and all(a['print_time'] == a['monotonic'] + 100.
+                  for a in meta['anchors']),
+          "time anchors with monotonic, unix and print time")
+    check(meta['files']['force'].endswith("_force.csv")
+          and meta['start_print_time'] == 2.005
+          and meta['stop_print_time'] == 5.005
+          and meta['result']['edges'] == res['edges']
+          and meta['columns'][-1] == "a_vel_deg_s",
+          "meta file describes the run")
 
 def run_logged(printer, enc):
     printer.gcode.run('FLOW_MONITOR_START', LABEL='dir', LOG='1',
@@ -515,7 +679,8 @@ def main():
              test_restart_and_stop_without_run, test_reset_and_query,
              test_monitor_with_load_cell,
              test_load_cell_overdue_and_uncalibrated, test_log_dir,
-             test_stall_and_edge_timing]
+             test_stall_and_edge_timing, test_extra_columns,
+             test_side_files_and_anchors]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()

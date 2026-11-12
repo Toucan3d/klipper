@@ -3,7 +3,7 @@
 # Copyright (C) 2026  Toucan3D
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import collections, logging, math, os, re, time
+import collections, json, logging, math, os, re, time
 from . import bulk_sensor, pulse_counter
 
 DEFAULT_ENCODER_KEY = None
@@ -11,7 +11,59 @@ WAIT_TIMEOUT = 2.
 FORCE_DELAY_BASE = 1.
 # Stall samples arrive in batches every 0.5 s (bulk_sensor.BATCH_INTERVAL)
 STALL_DELAY = 1.5
+# Heater temperatures arrive every 0.1 to 0.3 s
+TEMP_DELAY = 0.5
 MIN_PULSES = 4
+META_SCHEMA = 1
+
+def trapq_state(trapq, print_time):
+    # Commanded (position, velocity) of a trapq at a print time, from the
+    # move that covers it or the last move before it
+    import chelper
+    ffi_main, ffi_lib = chelper.get_ffi()
+    data = ffi_main.new('struct pull_move[1]')
+    count = ffi_lib.trapq_extract_old(trapq, data, 1, 0., print_time)
+    if not count:
+        return None, None
+    move = data[0]
+    move_time = max(0., min(move.move_t, print_time - move.print_time))
+    dist = (move.start_v + .5 * move.accel * move_time) * move_time
+    velocity = (move.start_v + move.accel * move_time) * move.x_r
+    return move.start_x + move.x_r * dist, velocity
+
+def history_step(history, print_time):
+    # Newest entry at or before a print time, else the oldest entry
+    for entry in reversed(history):
+        if entry[0] <= print_time:
+            return entry
+    if history:
+        return history[0]
+    return None
+
+def history_interp(history, print_time):
+    # Value linearly interpolated between the entries around a print
+    # time, the nearest entry outside the covered time
+    if not history:
+        return None
+    if print_time >= history[-1][0]:
+        return history[-1][1]
+    later = history[-1]
+    for i in range(len(history) - 2, -1, -1):
+        sample = history[i]
+        if sample[0] <= print_time:
+            dt = later[0] - sample[0]
+            if dt <= 0.:
+                return sample[1]
+            f = (print_time - sample[0]) / dt
+            return sample[1] + f * (later[1] - sample[1])
+        later = sample
+    return history[0][1]
+
+def trim_history(history, keep_time):
+    if history:
+        min_time = history[-1][0] - keep_time
+        while len(history) > 2 and history[0][0] < min_time:
+            history.popleft()
 
 
 ######################################################################
@@ -30,11 +82,18 @@ class MonitorRun:
         self.status_timer = None
         self.log_file = None
         self.log_name = None
-        # Log rows waiting for the delayed load cell and stall samples
+        # Log rows waiting for the delayed load cell, stall and heater
+        # samples
         self.pending = collections.deque()
-        # Print time of each edge in the run, None where one sample held
-        # more than one edge and the single edge times are unknown
+        # (print time of the newest edge, edges) of each encoder sample
+        # with new edges, the single edge times are unknown when one
+        # sample holds more than one edge
         self.edge_times = []
+        # Side files next to the run CSV
+        self.base_name = None
+        self.force_file = self.edges_file = None
+        self.force_cursor = None
+        self.anchors = []
     def is_started(self):
         return self.start_edges is not None
     def in_run(self, print_time):
@@ -62,8 +121,20 @@ class FilamentEncoder:
             'history_time', 60., above=self.speed_window)
         self.extruder_name = config.get('extruder', None)
         self.extruder = None
+        self.heater = None
+        # Force source: a [load_cell] name or the full name of any object
+        # with the load_cell client interface
         self.load_cell_name = config.get('load_cell', None)
         self.load_cell = None
+        self.force_sps = None
+        # Additional logged values
+        self.mosfet_name = config.get('mosfet_sensor', None)
+        self.mosfet = None
+        self.a_stepper_name = config.get('a_stepper', None)
+        self.a_stepper = None
+        self.temp_history = collections.deque()
+        self.heat_steps = collections.deque()
+        self.mosfet_history = collections.deque()
         self.log_path = config.get('log_path', None)
         self.force_history = collections.deque()
         self.force_delay = 0.
@@ -114,18 +185,40 @@ class FilamentEncoder:
                                                 DEFAULT_ENCODER_KEY, func)
     def _handle_ready(self):
         if self.load_cell_name is not None:
-            load_cell = self.printer.lookup_object(
-                'load_cell ' + self.load_cell_name, None)
-            if load_cell is None or not hasattr(load_cell, 'add_client'):
+            # Any object with add_client(cb) and
+            # get_sensor().get_samples_per_second() works as force source,
+            # cb gets {'data': [[print_time, grams, counts, ...], ...]}
+            obj_name = self.load_cell_name
+            if ' ' not in obj_name:
+                obj_name = 'load_cell ' + obj_name
+            load_cell = self.printer.lookup_object(obj_name, None)
+            if (load_cell is None or not hasattr(load_cell, 'add_client')
+                    or not hasattr(load_cell, 'get_sensor')):
                 raise self.printer.config_error(
                     "filament_encoder %s: unknown load_cell '%s'"
                     % (self.name, self.load_cell_name))
             self.load_cell = load_cell
             # Samples arrive in blocks, wait for at most two blocks
             sps = load_cell.get_sensor().get_samples_per_second()
+            self.force_sps = sps
             block = bulk_sensor.MAX_BULK_MSG_SIZE // 3
             self.force_delay = FORCE_DELAY_BASE + 2. * block / sps
             load_cell.add_client(self._load_cell_callback)
+        if self.mosfet_name is not None:
+            mosfet = self.printer.lookup_object(self.mosfet_name, None)
+            if mosfet is None or not hasattr(mosfet, 'get_status'):
+                raise self.printer.config_error(
+                    "filament_encoder %s: unknown mosfet_sensor '%s'"
+                    % (self.name, self.mosfet_name))
+            self.mosfet = mosfet
+        if self.a_stepper_name is not None:
+            a_stepper = self.printer.lookup_object(self.a_stepper_name, None)
+            if (a_stepper is None or not hasattr(a_stepper, 'get_trapq')
+                    or not hasattr(a_stepper, 'get_axis_gcode_id')):
+                raise self.printer.config_error(
+                    "filament_encoder %s: unknown a_stepper '%s', use a"
+                    " manual_stepper" % (self.name, self.a_stepper_name))
+            self.a_stepper = a_stepper
         for name in self.stall_names:
             dump = self.printer.lookup_object('tmc_stallguard ' + name, None)
             if dump is None:
@@ -145,12 +238,14 @@ class FilamentEncoder:
                 "filament_encoder %s: unknown extruder '%s'"
                 % (self.name, self.extruder_name))
         self.extruder = extruder
+        if hasattr(extruder, 'get_heater'):
+            self.heater = extruder.get_heater()
     def _handle_shutdown(self):
         for run in [self.run] + self.finishing:
             if run is not None:
                 self._stop_status_timer(run)
                 self._flush_log(run, force=True)
-                self._close_log(run)
+                self._end_log(run)
     # Sample handling
     def _counter_callback(self, print_time, count, count_time):
         # Called in the serial thread, hand over to the main thread
@@ -170,8 +265,12 @@ class FilamentEncoder:
                 self.last_edge_time = count_time
                 for run in [self.run] + self.finishing:
                     if run is not None and run.in_run(count_time):
-                        run.edge_times.append(
-                            count_time if new_edges == 1 else None)
+                        n = int(round(new_edges))
+                        run.edge_times.append((count_time, n))
+                        if run.edges_file is not None:
+                            self._write_side(run, 'edges_file',
+                                             "%.6f,%d\n" % (count_time, n))
+        self._poll_sensors(print_time)
         if self.extruder is not None:
             epos = self.extruder.find_past_position(print_time)
             if self.last_epos is not None:
@@ -210,6 +309,75 @@ class FilamentEncoder:
         if not self.history:
             return 0
         return self.history[-1][1]
+    # Heater, MOSFET and motion values for the log rows
+    def _poll_sensors(self, print_time):
+        heater = self.heater
+        if heater is not None:
+            read_time = getattr(heater, 'last_temp_time', None)
+            temps = self.temp_history
+            if read_time and (not temps or read_time > temps[-1][0]):
+                temps.append((read_time, heater.last_temp))
+                trim_history(temps, self.history_time)
+            step = (heater.target_temp, heater.last_pwm_value)
+            steps = self.heat_steps
+            if not steps or steps[-1][1:] != step:
+                steps.append((print_time,) + step)
+                trim_history(steps, self.history_time)
+        if self.mosfet is not None:
+            temp = self.mosfet.get_status(
+                self.reactor.monotonic()).get('temperature')
+            hist = self.mosfet_history
+            if temp is not None and (not hist or hist[-1][1] != temp):
+                hist.append((print_time, temp))
+                trim_history(hist, self.history_time)
+    def _temp_ready(self, print_time):
+        # True once a heater reading at or after the print time exists,
+        # or when it is overdue
+        if self.heater is None:
+            return True
+        temps = self.temp_history
+        if temps and temps[-1][0] >= print_time:
+            return True
+        if not self.history:
+            return False
+        return self.history[-1][0] - print_time > TEMP_DELAY
+    def _motion_values(self, print_time):
+        # Commanded extruder velocity and A axis position and velocity
+        e_vel = a_pos = a_vel = None
+        if self.extruder is not None and hasattr(self.extruder, 'get_trapq'):
+            pos, e_vel = trapq_state(self.extruder.get_trapq(), print_time)
+        a_stepper = self.a_stepper
+        if a_stepper is not None and a_stepper.get_axis_gcode_id():
+            a_pos, a_vel = trapq_state(a_stepper.get_trapq(), print_time)
+        return e_vel, a_pos, a_vel
+    def _has_extra_columns(self):
+        return (self.extruder is not None or self.mosfet is not None
+                or self.a_stepper is not None)
+    def _extra_columns(self, print_time, motion):
+        # CSV text of the columns after the stall columns
+        e_vel, a_pos, a_vel = motion
+        cols = []
+        if self.extruder is not None:
+            cols.append(self._fmt_val(e_vel, "%.4f"))
+            temp = target = power = None
+            if self.heater is not None:
+                temp = history_interp(self.temp_history, print_time)
+                step = history_step(self.heat_steps, print_time)
+                if step is not None:
+                    target, power = step[1], step[2]
+            cols += [self._fmt_val(temp, "%.2f"),
+                     self._fmt_val(target, "%.1f"),
+                     self._fmt_val(power, "%.4f")]
+        if self.mosfet is not None:
+            step = history_step(self.mosfet_history, print_time)
+            cols.append(self._fmt_val(None if step is None else step[1],
+                                      "%.2f"))
+        if self.a_stepper is not None:
+            cols += [self._fmt_val(a_pos, "%.4f"),
+                     self._fmt_val(a_vel, "%.3f")]
+        if not cols:
+            return ""
+        return "," + ",".join(cols)
     def get_speed(self):
         history = self.history
         if len(history) < 2:
@@ -349,7 +517,7 @@ class FilamentEncoder:
     def _pulse_stats(self, run):
         # Scatter of the time between full pulses (two edges), the SFS
         # edges themselves are asymmetric
-        times = run.edge_times
+        times = [t if n == 1 else None for t, n in run.edge_times]
         durations = []
         for i in range(len(times) - 2):
             if None in (times[i], times[i + 1], times[i + 2]):
@@ -362,7 +530,8 @@ class FilamentEncoder:
         return {'pulse_cv': 100. * math.sqrt(var) / mean,
                 'pulses': len(durations)}
     def _data_ready(self, print_time):
-        return self._force_ready(print_time) and self._stall_ready(print_time)
+        return (self._force_ready(print_time) and self._stall_ready(print_time)
+                and self._temp_ready(print_time))
     def _force_ready(self, print_time):
         # True once the load cell samples cover the print time, or when
         # they are overdue
@@ -417,10 +586,15 @@ class FilamentEncoder:
                 print_time, round(vals['edges']), vals['length'],
                 self.get_speed(), flow, self._fmt_csv(vals['commanded']),
                 edge_time)
-            if self.load_cell is None and not self.stall_dumps:
-                self._write_log(run, row + "\n")
+            # Motion is final at the row time, the axis registration may
+            # change before the delayed row is written
+            motion = self._motion_values(print_time)
+            if (self.load_cell is None and not self.stall_dumps
+                    and self.heater is None):
+                self._write_log(run, row + self._extra_columns(
+                    print_time, motion) + "\n")
             else:
-                run.pending.append((print_time, row))
+                run.pending.append((print_time, row, motion))
                 self._flush_log(run)
     def _try_finish(self, run):
         if run.done or run.stop_time is None or not self.history:
@@ -453,7 +627,7 @@ class FilamentEncoder:
         run.done = True
         self.last_result = result
         self._stop_status_timer(run)
-        self._close_log(run)
+        self._end_log(run)
         if run in self.finishing:
             self.finishing.remove(run)
         if run is self.run:
@@ -508,6 +682,8 @@ class FilamentEncoder:
             run.status_timer = None
     def _set_start_time(self, run, print_time):
         run.start_time = print_time
+        if run.log_file is not None:
+            self._add_anchor(run, 'start')
         if self.history and self.history[-1][0] >= print_time:
             self._update_run(run, self.history[-1][0])
     def _set_stop_time(self, run, print_time):
@@ -550,23 +726,88 @@ class FilamentEncoder:
         fname = "flow_%s_%s.csv" % (label, stamp) if label \
             else "flow_%s.csv" % (stamp,)
         path = os.path.join(log_dir, fname)
+        base = path[:-len(".csv")]
         try:
             if not os.path.isdir(log_dir):
                 os.makedirs(log_dir)
             run.log_file = open(path, 'w')
-            header = ("print_time,edges,length_mm,speed_mm_s,flow_mm3_s,"
-                      "commanded_mm,edge_time")
-            if self.load_cell is not None:
-                header += ",force_g,force_counts"
-            for name in self.stall_names:
-                short = re.sub(r'[^A-Za-z0-9]+', '_', name)
-                header += ",sg_%s,cs_%s" % (short, short)
-            run.log_file.write(header + "\n")
+            run.log_file.write(",".join(self._log_columns()) + "\n")
             run.log_name = path
+            run.base_name = base
+            run.edges_file = open(base + "_edges.csv", 'w')
+            run.edges_file.write("print_time,edges\n")
+            if self.load_cell is not None:
+                run.force_file = open(base + "_force.csv", 'w')
+                run.force_file.write("print_time,force_counts,force_g\n")
         except (IOError, OSError) as e:
             logging.exception("filament_encoder: unable to open log")
             self.gcode.respond_info("FLOW log error: %s" % (str(e),))
-            run.log_file = None
+            self._close_log(run)
+            run.base_name = run.log_name = None
+            return
+        self._add_anchor(run, 'open')
+        self._write_meta(run)
+    def _log_columns(self):
+        cols = ["print_time", "edges", "length_mm", "speed_mm_s",
+                "flow_mm3_s", "commanded_mm", "edge_time"]
+        if self.load_cell is not None:
+            cols += ["force_g", "force_counts"]
+        for name in self.stall_names:
+            short = re.sub(r'[^A-Za-z0-9]+', '_', name)
+            cols += ["sg_" + short, "cs_" + short]
+        if self.extruder is not None:
+            cols += ["e_cmd_vel_mm_s", "nozzle_c", "target_c",
+                     "heater_power"]
+        if self.mosfet is not None:
+            cols.append("mosfet_c")
+        if self.a_stepper is not None:
+            cols += ["a_pos_deg", "a_vel_deg_s"]
+        return cols
+    # Time anchors and run description for external data streams
+    def _add_anchor(self, run, event):
+        eventtime = self.reactor.monotonic()
+        unix_time = time.time()
+        print_time = None
+        mcu = self.printer.lookup_object('mcu', None)
+        if mcu is not None:
+            print_time = mcu.estimated_print_time(eventtime)
+        run.anchors.append({'event': event, 'monotonic': eventtime,
+                            'unix_time': unix_time,
+                            'print_time': print_time})
+    def _write_meta(self, run):
+        if run.base_name is None:
+            return
+        base = os.path.basename(run.base_name)
+        meta = {
+            'schema': META_SCHEMA, 'encoder': self.name,
+            'label': run.label,
+            'software_version': self.printer.get_start_args().get(
+                'software_version'),
+            'files': {
+                'rows': base + ".csv", 'edges': base + "_edges.csv",
+                'force': (base + "_force.csv"
+                          if self.load_cell is not None else None)},
+            'columns': self._log_columns(),
+            'start_print_time': run.start_time,
+            'stop_print_time': run.stop_time,
+            'anchors': run.anchors,
+            'mm_per_edge': self.mm_per_edge,
+            'filament_area_mm2': self.area,
+            'sample_time': self.sample_time,
+            'speed_window': self.speed_window,
+            'force_source': self.load_cell_name,
+            'force_samples_per_second': self.force_sps,
+            'stall_steppers': self.stall_names,
+            'stall_interval': self.stall_interval,
+            'extruder': self.extruder_name,
+            'mosfet_sensor': self.mosfet_name,
+            'a_stepper': self.a_stepper_name,
+            'result': run.result}
+        try:
+            with open(run.base_name + "_meta.json", 'w') as f:
+                json.dump(meta, f, indent=1, sort_keys=True)
+        except (IOError, OSError, TypeError, ValueError):
+            logging.exception("filament_encoder: unable to write meta file")
     def _write_log(self, run, line):
         try:
             run.log_file.write(line)
@@ -575,11 +816,12 @@ class FilamentEncoder:
             self.gcode.respond_info("FLOW log error: %s" % (str(e),))
             self._close_log(run)
     def _flush_log(self, run, force=False):
-        # Write the waiting rows once the load cell and stall samples
-        # cover them
+        # Write the waiting rows once the load cell, stall and heater
+        # samples cover them
+        self._flush_force_samples(run)
         pending = run.pending
         while pending and run.log_file is not None:
-            print_time, row = pending[0]
+            print_time, row, motion = pending[0]
             if not force and not self._data_ready(print_time):
                 break
             pending.popleft()
@@ -592,17 +834,57 @@ class FilamentEncoder:
                 sg, cs = self.stall_at(index, print_time)
                 row += ",%s,%s" % ("" if sg is None else "%d" % (sg,),
                                    "" if cs is None else "%d" % (cs,))
+            row += self._extra_columns(print_time, motion)
             self._write_log(run, row + "\n")
         if run.log_file is None:
             pending.clear()
-    def _close_log(self, run):
-        if run.log_file is None:
+    def _flush_force_samples(self, run):
+        # Copy every native load cell sample of the run to the side file
+        if run.force_file is None or run.start_time is None:
             return
+        cursor = run.force_cursor
+        new = []
+        for sample in reversed(self.force_history):
+            if cursor is not None and sample[0] <= cursor:
+                break
+            if sample[0] < run.start_time:
+                break
+            if run.stop_time is None or sample[0] <= run.stop_time:
+                new.append(sample)
+        for sample_time, grams, counts in reversed(new):
+            self._write_side(run, 'force_file', "%.6f,%.0f,%s\n" % (
+                sample_time, counts, self._fmt_csv(grams)))
+            run.force_cursor = sample_time
+    def _write_side(self, run, attr, line):
+        fobj = getattr(run, attr)
         try:
-            run.log_file.close()
-        except IOError:
-            logging.exception("filament_encoder: unable to close log")
-        run.log_file = None
+            fobj.write(line)
+        except IOError as e:
+            logging.exception("filament_encoder: unable to write side file")
+            self.gcode.respond_info("FLOW log error: %s" % (str(e),))
+            try:
+                fobj.close()
+            except IOError:
+                pass
+            setattr(run, attr, None)
+    def _end_log(self, run):
+        # Close the files and complete the run description
+        if run.base_name is None:
+            return
+        self._close_log(run)
+        self._add_anchor(run, 'close')
+        self._write_meta(run)
+        run.base_name = None
+    def _close_log(self, run):
+        for attr in ('log_file', 'edges_file', 'force_file'):
+            fobj = getattr(run, attr)
+            if fobj is None:
+                continue
+            try:
+                fobj.close()
+            except IOError:
+                logging.exception("filament_encoder: unable to close log")
+            setattr(run, attr, None)
     # Formatting helpers
     def _fmt_label(self, run):
         if run.label:
@@ -620,6 +902,10 @@ class FilamentEncoder:
         if val is None:
             return ""
         return "%.3f" % (val,)
+    def _fmt_val(self, val, fmt):
+        if val is None:
+            return ""
+        return fmt % (val,)
     # Commands
     cmd_ENCODER_QUERY_help = "Report the filament encoder length and flow"
     def cmd_ENCODER_QUERY(self, gcmd):

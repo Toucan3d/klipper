@@ -551,7 +551,19 @@ tared, `force_counts` holds the raw sensor value). The column
 `edge_time` holds the print time of the newest encoder edge, measured
 by the micro-controller. With `stall_steppers` configured each stepper
 adds the columns `sg_<stepper>` and `cs_<stepper>`, the newest
-SG_RESULT and CS_ACTUAL at the print time of the row. A
+SG_RESULT and CS_ACTUAL at the print time of the row. With an
+`extruder` the rows end with `e_cmd_vel_mm_s` (commanded extruder
+velocity, negative while retracting), `nozzle_c` (heater temperature,
+interpolated between its readings), `target_c` and `heater_power`;
+`mosfet_sensor` adds `mosfet_c` and `a_stepper` adds `a_pos_deg` and
+`a_vel_deg_s` (empty while the stepper is no G-code axis). Next to the
+CSV file the run writes `<name>_edges.csv` (print time of the newest
+edge and the number of edges of each encoder sample with new edges),
+`<name>_force.csv` with every native load cell sample of the run
+(print time, raw counts, grams) and `<name>_meta.json` with the
+settings, the result and time anchors that pair the print time with
+the host monotonic and the Unix time at the open, start and close of
+the run, to align external data streams. A
 second FLOW_MONITOR_START while a run is active ends the old run with
 a summary first. The command does not wait for the moves.
 
