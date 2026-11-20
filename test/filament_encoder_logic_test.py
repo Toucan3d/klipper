@@ -113,6 +113,7 @@ class StubPrinter:
     command_error = StubError
 
 class StubConfig:
+    error = StubError
     def __init__(self, printer, name, opts):
         self.printer = printer
         self.name = name
@@ -729,6 +730,260 @@ def test_log_dir():
     check(os.path.dirname(path) == custom and os.path.isfile(path),
           "log_path option creates the folder")
 
+######################################################################
+# Angle sensor as length source
+######################################################################
+
+MM_PER_REV = 31.4
+
+class StubAngle:
+    # Stands in for an [angle] sensor: batches of (print_time, counts),
+    # 65536 counts per turn, already unwrapped
+    def __init__(self):
+        self.clients = []
+    def add_client(self, cb):
+        self.clients.append(cb)
+    def send(self, samples, errors=0):
+        for cb in list(self.clients):
+            if not cb({'data': samples, 'errors': errors,
+                       'position_offset': None}):
+                self.clients.remove(cb)
+
+class StubFuncExtruder:
+    # Commanded position from a function of the print time
+    def __init__(self, func):
+        self.func = func
+    def find_past_position(self, print_time):
+        return self.func(print_time)
+
+def make_angle_encoder(pin=False, mm_per_rev=MM_PER_REV, extruder=None,
+                       extra=None):
+    log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
+    os.mkdir(log_dir)
+    printer = StubPrinter(log_dir)
+    angle = StubAngle()
+    printer.objects['angle filament_wheel'] = angle
+    if extruder is not None:
+        printer.objects['extruder'] = StubFuncExtruder(extruder)
+    opts = {'angle_sensor': 'filament_wheel', 'mm_per_rev': mm_per_rev,
+            'mm_per_edge': MM_PER_EDGE, 'extruder': 'extruder'}
+    if pin:
+        opts['pin'] = 'PG13'
+    opts.update(extra or {})
+    orig = pulse_counter.MCU_counter
+    pulse_counter.MCU_counter = StubCounter
+    try:
+        enc = filament_encoder.FilamentEncoder(
+            StubConfig(printer, 'filament_encoder sfs', opts))
+    finally:
+        pulse_counter.MCU_counter = orig
+    printer.send_event("klippy:ready")
+    return printer, enc, angle
+
+def angle_counts(pos_mm, mm_per_rev=MM_PER_REV, noise=0.):
+    # Unwrapped counts with an offset, the encoder measures from the first
+    deg = pos_mm / mm_per_rev * 360. + noise
+    return 12345 + int(round(deg * 65536. / 360.))
+
+def feed_angle(angle, t0, t1, pos, mm_per_rev=MM_PER_REV, noise=0.,
+               rng=None, dt=0.001, batch=100):
+    # 1 kHz samples in batches of 0.1 s, pos(t) is the filament position
+    rows = []
+    for i in range(int(round((t1 - t0) / dt)) + 1):
+        t = t0 + i * dt
+        n = rng.gauss(0., noise) if noise else 0.
+        rows.append((t, angle_counts(pos(t), mm_per_rev, n)))
+        if len(rows) >= batch:
+            angle.send(rows)
+            rows = []
+    if rows:
+        angle.send(rows)
+
+def test_angle_constant_speed():
+    printer, enc, angle = make_angle_encoder()
+    check(angle.clients and enc.counter is None,
+          "angle stream subscribed at ready, no pulse counter")
+    feed_angle(angle, 1., 4., lambda t: 20. * t)
+    check(abs(enc.get_speed() - 20.) < 0.01,
+          "speed %.4f is 20 mm/s" % (enc.get_speed(),))
+    st = enc.get_status(0.)
+    t_last = enc.history[-1][0]
+    expect = 20. * (t_last - 1.)
+    check(abs(st['absolute'] - expect) < 0.005,
+          "length %.4f mm matches the bucket time (%.4f)"
+          % (st['absolute'], expect))
+    check(st['length_source'] == 'angle'
+          and abs(st['revolutions'] - expect / MM_PER_REV) < 1e-3
+          and st['angle_errors'] == 0 and st['angle_samples'] == 3001,
+          "status: source, revolutions, errors, samples")
+    check(abs(enc.history[1][0] - enc.history[0][0] - 0.010) < 1e-9,
+          "one history entry per 10 ms bucket")
+
+def test_angle_noise():
+    import random
+    rng = random.Random(1)
+    printer, enc, angle = make_angle_encoder()
+    feed_angle(angle, 1., 3., lambda t: 5., noise=0.075, rng=rng)
+    check(enc.last_edge_time is None and enc.track.travel == 0.,
+          "sensor noise at rest adds no travel and no edges")
+    check(0.06 < enc.track.noise < 0.09,
+          "noise estimate %.4f deg near 0.075" % (enc.track.noise,))
+    # The zero is the first raw sample, so only the spread counts
+    pos = [e * MM_PER_EDGE for t, e, c in enc.history]
+    mean = sum(pos) / len(pos)
+    rms = math.sqrt(sum((p - mean) ** 2 for p in pos) / len(pos))
+    # 0.075 deg / sqrt(10 samples) on 31.4 mm per turn: 0.0021 mm
+    check(rms < 0.003, "averaged length at rest: %.5f mm rms" % (rms,))
+    printer, enc, angle = make_angle_encoder(
+        extra={'angle_hysteresis': 0.})
+    feed_angle(angle, 1., 3., lambda t: 5., noise=0.075, rng=rng)
+    check(enc.track.travel > 1.,
+          "without hysteresis the noise adds %.1f deg of travel"
+          % (enc.track.travel,))
+    feed_angle(angle, 3.001, 4., lambda t: 5. + 30. * (t - 3.001),
+               noise=0.075, rng=rng)
+    check(enc.track.noise < 0.09,
+          "noise estimate %.4f deg not raised by a constant speed"
+          % (enc.track.noise,))
+
+def e_retract(t):
+    # 10 mm/s to 4.0 s, retract 2 mm, unretract at 4.5 s, 10 mm/s again
+    if t <= 4.:
+        return 10. * t
+    if t <= 4.1:
+        return 40. - 20. * (t - 4.)
+    if t <= 4.5:
+        return 38.
+    if t <= 4.6:
+        return 38. + 20. * (t - 4.5)
+    return 40. + 10. * (t - 4.6)
+
+def test_angle_run_signed():
+    printer, enc, angle = make_angle_encoder(extruder=e_retract)
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='ang', LOG='1', INTERVAL='0')
+    run = enc.run
+    base = run.log_name[:-4]
+    toolhead.flush(1.5)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(5.5)
+    feed_angle(angle, 1., 6., e_retract)
+    res = enc.last_result
+    check(run.done and res is not None, "angle run finished")
+    expect = e_retract(5.5) - e_retract(1.5)
+    check(abs(res['commanded'] - expect) < 1e-6,
+          "commanded %.3f is signed, retract and unretract cancel (%.3f)"
+          % (res['commanded'], expect))
+    check(abs(res['length'] - expect) < 0.02 and abs(res['ratio'] - 100.) < 0.1,
+          "length %.3f, ratio %.2f" % (res['length'], res['ratio']))
+    check(abs(res['revolutions'] - expect / MM_PER_REV) < 1e-3
+          and res['angle_errors'] == 0 and res['sfs_edges'] is None,
+          "revolutions %.4f, no errors, no SFS" % (res['revolutions'],))
+    travel = 25. + 2. + 2. + 9.
+    n = len(run.edge_times)
+    check(abs(n - travel / MM_PER_EDGE) <= 1.
+          and all(c == 1 for t, c in run.edge_times),
+          "%d virtual edges for %.0f mm of travel both ways" % (n, travel))
+    check(res['pulse_cv'] is not None, "pulse_cv from the virtual edges")
+    edges = open(base + "_edges.csv").read().splitlines()[1:]
+    check(len(edges) == n, "edge file holds the virtual edges")
+    samples = open(base + "_angle.csv").read().splitlines()
+    check(samples[0] == "print_time,angle_counts"
+          and 3995 <= len(samples) - 1 <= 4001,
+          "angle file holds the %d native samples of the run"
+          % (len(samples) - 1,))
+    lines = open(run.log_name).read().splitlines()
+    header = lines[0].split(',')
+    rows = [dict(zip(header, r.split(','))) for r in lines[1:]]
+    check('sfs_edges' not in header and '.' in rows[-1]['edges'],
+          "edges column with decimals, no sfs column")
+    cmd = [float(r['commanded_mm']) for r in rows]
+    check(any(b < a for a, b in zip(cmd, cmd[1:])),
+          "commanded column goes back while retracting")
+    last = rows[-1]
+    check(abs(float(last['edges']) * MM_PER_EDGE - float(last['length_mm']))
+          < 0.01, "edges times mm_per_edge is the length")
+    meta = json.load(open(base + "_meta.json"))
+    check(meta['length_source'] == 'angle'
+          and meta['files']['angle'].endswith("_angle.csv")
+          and meta['mm_per_rev'] == MM_PER_REV
+          and meta['angle_hysteresis_deg'] == 0.3,
+          "meta describes the angle source")
+    check(any("revs=" in m and m.startswith("FLOW ang DONE")
+              for m in gcode.messages), "summary has the revolutions")
+
+def test_angle_reversed():
+    printer, enc, angle = make_angle_encoder(mm_per_rev=-MM_PER_REV)
+    feed_angle(angle, 1., 3., lambda t: 20. * t, mm_per_rev=-MM_PER_REV)
+    check(abs(enc.get_speed() - 20.) < 0.01,
+          "negative mm_per_rev turns a falling angle into %.3f mm/s"
+          % (enc.get_speed(),))
+
+def test_angle_with_sfs_ref():
+    speed = 20.
+    printer, enc, angle = make_angle_encoder(pin=True,
+                                             extruder=lambda t: speed * t)
+    check(enc.counter is not None, "pulse counter kept next to the angle")
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='ref', LOG='1', INTERVAL='0')
+    run = enc.run
+    toolhead.flush(1.5)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(3.5)
+    # The SFS reads 2 % short
+    t = 1.
+    while t <= 4. + 1e-9:
+        count = int((t - 1.) * speed * 0.98 / MM_PER_EDGE)
+        enc.counter.callback(t, count, t)
+        t += 0.01
+    feed_angle(angle, 1., 4., lambda t: speed * t)
+    res = enc.last_result
+    check(run.done and abs(res['length'] - 40.) < 0.02,
+          "length %.3f from the angle, not the counter" % (res['length'],))
+    expect = 40. * 0.98 / MM_PER_EDGE
+    check(res['sfs_edges'] is not None
+          and abs(res['sfs_edges'] - expect) <= 1.
+          and abs(res['sfs_length'] - res['sfs_edges'] * MM_PER_EDGE) < 1e-9,
+          "SFS edges %s of the run (about %.1f)" % (res['sfs_edges'], expect))
+    lines = open(run.log_name).read().splitlines()
+    header = lines[0].split(',')
+    last = dict(zip(header, lines[-1].split(',')))
+    check(header[-1] == 'sfs_edges'
+          and abs(int(last['sfs_edges']) - res['sfs_edges']) <= 1,
+          "rows end with the SFS edges of the run")
+    check(any("sfs=" in m for m in gcode.messages), "summary has the SFS")
+
+def test_angle_errors_and_config():
+    printer, enc, angle = make_angle_encoder()
+    angle.send([], errors=3)
+    feed_angle(angle, 1., 1.5, lambda t: 10. * t)
+    st = enc.get_status(0.)
+    check(st['angle_errors'] == 3, "angle read errors counted")
+    printer.gcode.run('ENCODER_QUERY', ENCODER='sfs')
+    check("revs=" in printer.gcode.messages[-1]
+          and "angle_errors=3" in printer.gcode.messages[-1],
+          "ENCODER_QUERY reports the angle")
+    def build(opts, objects=None):
+        log_dir = os.path.join(tempfile.mkdtemp(), 'logs')
+        os.mkdir(log_dir)
+        printer = StubPrinter(log_dir)
+        printer.objects.update(objects or {})
+        enc = filament_encoder.FilamentEncoder(
+            StubConfig(printer, 'filament_encoder sfs', opts))
+        printer.send_event("klippy:ready")
+    for opts, objects, what in [
+            ({'mm_per_edge': 1.}, None, "neither pin nor angle_sensor"),
+            ({'mm_per_edge': 1., 'angle_sensor': 'w', 'mm_per_rev': 0.},
+             None, "mm_per_rev 0"),
+            ({'mm_per_edge': 1., 'angle_sensor': 'w', 'mm_per_rev': 30.},
+             None, "unknown angle sensor")]:
+        try:
+            build(opts, objects)
+        except StubError:
+            check(True, "config error: %s" % (what,))
+        else:
+            raise AssertionError("no config error: %s" % (what,))
+
 def main():
     tests = [test_constant_speed, test_first_report_baseline,
              test_32bit_wrap, test_standstill, test_monitor_between_samples,
@@ -736,7 +991,10 @@ def main():
              test_monitor_with_load_cell,
              test_load_cell_overdue_and_uncalibrated, test_log_dir,
              test_stall_and_edge_timing, test_extra_columns,
-             test_side_files_and_anchors, test_stream_force_source]
+             test_side_files_and_anchors, test_stream_force_source,
+             test_angle_constant_speed, test_angle_noise,
+             test_angle_run_signed, test_angle_reversed,
+             test_angle_with_sfs_ref, test_angle_errors_and_config]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()

@@ -171,11 +171,21 @@ objects:
   `ENCODER_RESET ALL=1`.
 - `relative`: Filament length in mm since `ENCODER_RESET` or
   `FLOW_MONITOR_START`.
-- `edges`, `relative_edges`: The raw edge counts of both lengths.
-- `speed`: Filament speed in mm/s, averaged over `speed_window`.
+- `edges`, `relative_edges`: The raw edge counts of both lengths (with
+  an `angle_sensor` the lengths in `mm_per_edge` units).
+- `speed`: Filament speed in mm/s, averaged over `speed_window`
+  (negative while retracting with an `angle_sensor`).
 - `flow`: Filament flow in mm^3/s, the speed times the filament cross
   section.
 - `mm_per_edge`: The configured length per edge.
+- `length_source`: `angle` with an `angle_sensor`, otherwise `pulse`.
+- With an `angle_sensor` also: `mm_per_rev`, `revolutions` (wheel turns
+  of the absolute length), `angle_noise` (noise of the raw angle in
+  degrees rms from the last batch of samples, None before; a value of
+  several degrees means that the magnet is missing or too far away),
+  `angle_errors` (read errors since the start), `angle_samples` and
+  `sfs_edges` (edges of the `pin` since the start, None without a
+  pin).
 - `force`: The newest force in grams of the configured `load_cell`, or
   None without a load cell or before it is calibrated and tared. The
   value is up to one block of samples (about 1.2 seconds at 10 samples
@@ -191,7 +201,9 @@ objects:
   scatter of the time between full encoder pulses, None with fewer
   than 4 pulses), `pulses` and `stall` (None without
   `stall_steppers`, otherwise a dict per stepper with `samples`,
-  `sg_avg` and `sg_min`), or None before the first run.
+  `sg_avg` and `sg_min`), or None before the first run. With an
+  `angle_sensor` the result also has `revolutions`, `angle_errors`,
+  `sfs_edges` and `sfs_length` (mm, both None without a `pin`).
 
 ## filament_switch_sensor
 

@@ -5363,23 +5363,47 @@ switch_pin:
 ### [filament_encoder]
 
 Filament length, speed and flow measurement with the motion output of
-a filament encoder such as the BTT SFS V2.0. Every level change on the
-pin is counted on the micro-controller with the pulse counter, so no
-edges are lost at high speed. The module does no jam or runout
-detection and it cannot detect the direction of the filament. See the
+a filament encoder such as the BTT SFS V2.0, or with an
+[angle sensor](#angle) on a wheel that the filament turns. Every level
+change on the pin is counted on the micro-controller with the pulse
+counter, so no edges are lost at high speed; such an encoder cannot
+detect the direction of the filament. An angle sensor gives the
+direction and a resolution far below one edge: its samples are
+averaged over `sample_time`, the length is signed (a retract counts
+back) and the commanded length of the `extruder` is then signed as
+well. Virtual edges, one per `mm_per_edge` of travel in either
+direction, keep the edge times, the edge file and `pulse_cv` of the
+logged runs. The module does no jam or runout detection. See the
 [command reference](G-Codes.md#filament_encoder) for the commands and
 the [filament flow sensor](#filament-flow-sensor) for a live display.
 
 ```
 [filament_encoder my_encoder]
-pin:
-#   Input pin connected to the motion output of the encoder. This
-#   parameter must be provided.
+#pin:
+#   Input pin connected to the motion output of the encoder. Either
+#   pin or angle_sensor must be provided. With both, the angle sensor
+#   is the length source and the edges of the pin are logged next to
+#   it for comparison.
+#angle_sensor:
+#   Name of an [angle] section on the filament wheel (for example
+#   'filament_wheel' for [angle filament_wheel]). The stream of the
+#   sensor stays on while Klipper runs. The [angle] section needs no
+#   stepper.
+#mm_per_rev:
+#   Filament length in mm per turn of the angle sensor. Negative if
+#   the angle falls while filament is fed. Calibrate it with a run at
+#   a low force: mm_per_rev = commanded / revolutions of the result.
+#   This parameter must be provided with angle_sensor.
+#angle_hysteresis: 0.3
+#   Band in degrees of wheel angle around the averaged angle that
+#   adds no travel to the virtual edges, so sensor noise at rest adds
+#   no edges. The length itself is not affected. The default is 0.3.
 mm_per_edge:
 #   Filament length in mm between two level changes of the pin. The
 #   BTT SFS V2.0 is specified with 2.88mm, calibrate it by pushing a
 #   marked length through the sensor and comparing the edge count.
-#   This parameter must be provided.
+#   With angle_sensor it is the length of one virtual edge. This
+#   parameter must be provided.
 #filament_diameter: 1.75
 #   Filament diameter in mm, used to turn the speed into a flow. The
 #   default is 1.75.
@@ -5387,8 +5411,9 @@ mm_per_edge:
 #   Time in seconds over which speed and flow are averaged. The
 #   default is 1.0.
 #sample_time: 0.010
-#   How often in seconds the micro-controller reports the count. The
-#   default is 0.010.
+#   How often in seconds the micro-controller reports the count. With
+#   angle_sensor it is the time over which the angle samples are
+#   averaged into one sample of the length. The default is 0.010.
 #poll_time: 0.0002
 #   How often in seconds the micro-controller checks the pin. The
 #   default is 0.0002.

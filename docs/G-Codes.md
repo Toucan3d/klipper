@@ -528,7 +528,9 @@ pairs.
 
 #### ENCODER_QUERY
 `ENCODER_QUERY [ENCODER=<name>]`: Reports the absolute and relative
-length, the edge counts, the speed and the flow of the encoder.
+length, the edge counts, the speed and the flow of the encoder. With an
+`angle_sensor` it also reports the wheel turns, the angle noise, the
+read errors and, with a `pin`, the SFS edges.
 
 #### ENCODER_RESET
 `ENCODER_RESET [ENCODER=<name>] [ALL=1]`: Restarts the relative
@@ -556,7 +558,13 @@ SG_RESULT and CS_ACTUAL at the print time of the row. With an
 velocity, negative while retracting), `nozzle_c` (heater temperature,
 interpolated between its readings), `target_c` and `heater_power`;
 `mosfet_sensor` adds `mosfet_c` and `a_stepper` adds `a_pos_deg` and
-`a_vel_deg_s` (empty while the stepper is no G-code axis). Next to the
+`a_vel_deg_s` (empty while the stepper is no G-code axis). With an
+`angle_sensor` the column `edges` is the signed length in
+`mm_per_edge` units with decimals, `commanded_mm` is signed, `edge_time`
+is the time of the newest virtual edge, a `pin` adds the column
+`sfs_edges` (edges of the pin since the run start) at the end, and
+`<name>_angle.csv` holds every native angle sample of the run (print
+time, unwrapped counts with 65536 per turn). Next to the
 CSV file the run writes `<name>_edges.csv` (print time of the newest
 edge and the number of edges of each encoder sample with new edges),
 `<name>_force.csv` with every native load cell sample of the run
@@ -577,6 +585,9 @@ summary also has the average, minimum and maximum force in grams.
 `pulse_cv` is the scatter of the time between full encoder pulses (two
 edges) in percent, a rising value shows that the filament slips. With
 `stall_steppers` the summary has `sg[<stepper>]=<average>/<minimum>`.
+With an `angle_sensor` it has `revs` (wheel turns of the run),
+`angle_errors` when there were read errors and, with a `pin`, `sfs`
+(length of the pin edges).
 Without `WAIT=1` the command returns
 immediately and the summary follows once the moves are done. With
 `WAIT=1` the command waits for the moves and the summary, so a
