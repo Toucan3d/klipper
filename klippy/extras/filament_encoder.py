@@ -325,8 +325,11 @@ class FilamentEncoder:
                     "filament_encoder %s: unknown angle_sensor '%s'"
                     % (self.name, self.angle_name))
             self.angle = angle
-            # The stream stays on: the angle is the length source
-            angle.add_client(self._angle_callback)
+            # Starting the stream waits for SPI replies, which is not
+            # allowed in a ready handler. The stream stays on: the angle
+            # is the length source.
+            self.reactor.register_callback(
+                lambda e: angle.add_client(self._angle_callback))
         if self.load_cell_name is not None:
             # Force source: a [load_cell] or any object with add_client(cb)
             # and get_samples_per_second() (on itself or on get_sensor()).

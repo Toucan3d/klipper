@@ -31,6 +31,8 @@ class StubReactor:
         self.timers = []
     def register_async_callback(self, cb, waketime=0.):
         cb(0.)
+    def register_callback(self, cb, waketime=0.):
+        cb(0.)
     def register_timer(self, cb, waketime=NEVER):
         self.timers.append(cb)
         return cb
