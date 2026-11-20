@@ -20,6 +20,13 @@ class AngleCalibration:
         self.printer = config.get_printer()
         self.name = config.get_name()
         self.stepper_name = config.get('stepper', None)
+        # Current calibration data (also needed without a stepper, as
+        # apply_calibration() runs on every batch)
+        self.tmc_module = self.mcu_stepper = None
+        self.mcu_pos_offset = None
+        self.angle_phase_offset = 0.
+        self.calibration_reversed = False
+        self.calibration = []
         if self.stepper_name is None:
             # No calibration
             return
@@ -29,12 +36,6 @@ class AngleCalibration:
             raise config.error("Angle calibration requires numpy module")
         sconfig = config.getsection(self.stepper_name)
         sconfig.getint('microsteps', note_valid=False)
-        self.tmc_module = self.mcu_stepper = None
-        # Current calibration data
-        self.mcu_pos_offset = None
-        self.angle_phase_offset = 0.
-        self.calibration_reversed = False
-        self.calibration = []
         cal = config.get('calibrate', None)
         if cal is not None:
             data = [d.strip() for d in cal.split(',')]
