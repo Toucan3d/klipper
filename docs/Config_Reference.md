@@ -5469,6 +5469,11 @@ mm_per_edge:
 #   Optional full name of a temperature object (for example
 #   'temperature_sensor Transistors') whose temperature is logged in
 #   the column mosfet_c. The default is to not log it.
+#outlet_sensor:
+#   Optional full name of a [temperature_sensor] (for example
+#   'temperature_sensor t0' with its thermistor at the nozzle outlet)
+#   logged in the column outlet_c, interpolated between its readings
+#   (every 0.3 s) on their print time. The default is to not log it.
 #a_stepper:
 #   Optional full name of a manual_stepper (for example
 #   'manual_stepper stepper_a') whose commanded position and velocity

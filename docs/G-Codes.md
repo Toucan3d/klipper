@@ -557,7 +557,8 @@ SG_RESULT and CS_ACTUAL at the print time of the row. With an
 `extruder` the rows end with `e_cmd_vel_mm_s` (commanded extruder
 velocity, negative while retracting), `nozzle_c` (heater temperature,
 interpolated between its readings), `target_c` and `heater_power`;
-`mosfet_sensor` adds `mosfet_c` and `a_stepper` adds `a_pos_deg` and
+`mosfet_sensor` adds `mosfet_c`, `outlet_sensor` adds `outlet_c` and
+`a_stepper` adds `a_pos_deg` and
 `a_vel_deg_s` (empty while the stepper is no G-code axis). With an
 `angle_sensor` the column `edges` is the signed length in
 `mm_per_edge` units with decimals, `commanded_mm` is signed, `edge_time`

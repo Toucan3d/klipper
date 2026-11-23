@@ -255,6 +255,9 @@ class FilamentEncoder:
         # Additional logged values
         self.mosfet_name = config.get('mosfet_sensor', None)
         self.mosfet = None
+        self.outlet_name = config.get('outlet_sensor', None)
+        self.outlet = None
+        self.outlet_history = collections.deque()
         self.a_stepper_name = config.get('a_stepper', None)
         self.a_stepper = None
         self.temp_history = collections.deque()
@@ -396,6 +399,13 @@ class FilamentEncoder:
                     "filament_encoder %s: unknown mosfet_sensor '%s'"
                     % (self.name, self.mosfet_name))
             self.mosfet = mosfet
+        if self.outlet_name is not None:
+            outlet = self.printer.lookup_object(self.outlet_name, None)
+            if outlet is None or not hasattr(outlet, 'last_temp_time'):
+                raise self.printer.config_error(
+                    "filament_encoder %s: outlet_sensor '%s' must be a "
+                    "temperature_sensor" % (self.name, self.outlet_name))
+            self.outlet = outlet
         if self.a_stepper_name is not None:
             a_stepper = self.printer.lookup_object(self.a_stepper_name, None)
             if (a_stepper is None or not hasattr(a_stepper, 'get_trapq')
@@ -564,6 +574,13 @@ class FilamentEncoder:
             if temp is not None and (not hist or hist[-1][1] != temp):
                 hist.append((print_time, temp))
                 trim_history(hist, self.history_time)
+        if self.outlet is not None:
+            # Stored with the time of the ADC reading (every 0.3 s)
+            read_time = self.outlet.last_temp_time
+            hist = self.outlet_history
+            if read_time and (not hist or read_time > hist[-1][0]):
+                hist.append((read_time, self.outlet.last_temp))
+                trim_history(hist, self.history_time)
     def _temp_ready(self, print_time):
         # True once a heater reading at or after the print time exists,
         # or when it is overdue
@@ -586,6 +603,7 @@ class FilamentEncoder:
         return e_vel, a_pos, a_vel
     def _has_extra_columns(self):
         return (self.extruder is not None or self.mosfet is not None
+                or self.outlet is not None
                 or self.a_stepper is not None)
     def _has_ref(self):
         return self.track is not None and self.counter is not None
@@ -608,6 +626,9 @@ class FilamentEncoder:
             step = history_step(self.mosfet_history, print_time)
             cols.append(self._fmt_val(None if step is None else step[1],
                                       "%.2f"))
+        if self.outlet is not None:
+            cols.append(self._fmt_val(
+                history_interp(self.outlet_history, print_time), "%.2f"))
         if self.a_stepper is not None:
             cols += [self._fmt_val(a_pos, "%.4f"),
                      self._fmt_val(a_vel, "%.3f")]
@@ -1033,6 +1054,8 @@ class FilamentEncoder:
                      "heater_power"]
         if self.mosfet is not None:
             cols.append("mosfet_c")
+        if self.outlet is not None:
+            cols.append("outlet_c")
         if self.a_stepper is not None:
             cols += ["a_pos_deg", "a_vel_deg_s"]
         if self._has_ref():
@@ -1096,6 +1119,7 @@ class FilamentEncoder:
             'stall_interval': self.stall_interval,
             'extruder': self.extruder_name,
             'mosfet_sensor': self.mosfet_name,
+            'outlet_sensor': self.outlet_name,
             'a_stepper': self.a_stepper_name,
             'force_sync': self._force_sync_report(run),
             'result': run.result}
