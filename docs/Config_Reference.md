@@ -5398,6 +5398,14 @@ the [filament flow sensor](#filament-flow-sensor) for a live display.
 #   Band in degrees of wheel angle around the averaged angle that
 #   adds no travel to the virtual edges, so sensor noise at rest adds
 #   no edges. The length itself is not affected. The default is 0.3.
+#angle_correction:
+#   Fixed error of the wheel over one turn, for example from a magnet
+#   that is off-centre or tilted over the sensor, as comma separated
+#   pairs c1, s1, c2, s2, ... in degrees. Every raw sample is reduced
+#   by the sum of c_k*cos(k*a) + s_k*sin(k*a) of its physical angle a
+#   (raw counts modulo one turn). Fit the pairs from runs at a constant
+#   speed against the commanded length; they hold until the magnet or
+#   the wheel is moved. The default is no correction.
 mm_per_edge:
 #   Filament length in mm between two level changes of the pin. The
 #   BTT SFS V2.0 is specified with 2.88mm, calibrate it by pushing a

@@ -82,10 +82,15 @@ class AngleTrack:
     # deg_per_edge of travel in either direction. Travel only counts once
     # the averaged angle leaves a band of +-hysteresis degrees, so sensor
     # noise adds no edges. All angles in degrees from the first sample.
-    def __init__(self, bucket_time, deg_per_edge, hysteresis):
+    # correction: (c1, s1, c2, s2, ...) in degrees, a fixed error of the
+    # wheel over one turn (off-centre magnet or wheel), removed from every
+    # sample as sum(c_k cos(k th) + s_k sin(k th)) of the physical angle th.
+    def __init__(self, bucket_time, deg_per_edge, hysteresis, correction=()):
         self.bucket_time = bucket_time
         self.deg_per_edge = deg_per_edge
         self.hysteresis = hysteresis
+        correction = list(correction)
+        self.correction = list(zip(correction[0::2], correction[1::2]))
         self.base = None
         self.bucket_end = None
         self.sum_time = self.sum_angle = 0.
@@ -100,6 +105,17 @@ class AngleTrack:
         self.prev = []
         self.noise = None
         self.samples = 0
+    def wheel_error(self, counts):
+        # Error in degrees at the physical angle of the raw counts; the
+        # harmonics follow from cos/sin of the angle by rotation
+        th = (counts % ANGLE_COUNTS) * (2. * math.pi / ANGLE_COUNTS)
+        c1, s1 = math.cos(th), math.sin(th)
+        ck, sk = c1, s1
+        err = 0.
+        for c, s in self.correction:
+            err += c * ck + s * sk
+            ck, sk = ck * c1 - sk * s1, sk * c1 + ck * s1
+        return err
     def feed(self, samples):
         # Returns [(print_time, angle, [edge_time, ...]), ...], one entry
         # per closed time bucket
@@ -108,8 +124,11 @@ class AngleTrack:
         d2_sum = 0.
         d2_count = 0
         prev = self.prev
+        correct = self.correction
         for sample_time, counts in samples:
             angle = counts * k
+            if correct:
+                angle -= self.wheel_error(counts)
             if self.base is None:
                 self.base = angle
                 self.bucket_end = sample_time + self.bucket_time
@@ -273,6 +292,7 @@ class FilamentEncoder:
                                % (self.name,))
         self.angle = self.track = None
         self.mm_per_rev = self.angle_hysteresis = None
+        self.angle_correction = []
         self.angle_errors = 0
         self.ref_history = collections.deque()
         self.ref_base = None
@@ -283,9 +303,16 @@ class FilamentEncoder:
                                    " be 0" % (self.name,))
             self.angle_hysteresis = config.getfloat('angle_hysteresis', 0.3,
                                                     minval=0.)
+            self.angle_correction = list(
+                config.getfloatlist('angle_correction', ()))
+            if len(self.angle_correction) % 2:
+                raise config.error("filament_encoder %s: angle_correction"
+                                   " needs pairs c1, s1, c2, s2, ..."
+                                   % (self.name,))
             deg_per_edge = 360. * self.mm_per_edge / abs(self.mm_per_rev)
             self.track = AngleTrack(self.sample_time, deg_per_edge,
-                                    self.angle_hysteresis)
+                                    self.angle_hysteresis,
+                                    self.angle_correction)
         # Counter on the micro controller
         self.counter = None
         if pin is not None:
@@ -1055,6 +1082,7 @@ class FilamentEncoder:
             'angle_sensor': self.angle_name,
             'mm_per_rev': self.mm_per_rev,
             'angle_hysteresis_deg': self.angle_hysteresis,
+            'angle_correction_deg': self.angle_correction or None,
             'start_print_time': run.start_time,
             'stop_print_time': run.stop_time,
             'anchors': run.anchors,

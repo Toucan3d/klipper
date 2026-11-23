@@ -6,7 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
 # Run with: python3 test/filament_encoder_logic_test.py
-import json, math, os, sys, tempfile
+import glob, json, math, os, sys, tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', 'klippy'))
@@ -128,6 +128,13 @@ class StubConfig:
         return self.opts.get(name, default)
     def getfloat(self, name, default=None, above=None, minval=None):
         return float(self.opts.get(name, default))
+    def getfloatlist(self, name, default=None, sep=','):
+        val = self.opts.get(name)
+        if val is None:
+            return default
+        if isinstance(val, (list, tuple)):
+            return tuple(float(v) for v in val)
+        return tuple(float(p) for p in val.split(sep) if p.strip())
     def getlist(self, name, default=None, sep=','):
         val = self.opts.get(name)
         if val is None:
@@ -955,6 +962,66 @@ def test_angle_with_sfs_ref():
           "rows end with the SFS edges of the run")
     check(any("sfs=" in m for m in gcode.messages), "summary has the SFS")
 
+# Wheel error fitted on the bench 2026-11-23 (deg; c1, s1, c2, s2, c3, s3)
+WHEEL_ERR = [0.6001, 2.6447, -4.1682, -0.0505, 0.1390, -0.2136]
+
+def wheel_err_deg(counts):
+    th = (counts % 65536) * 2. * math.pi / 65536.
+    return sum(WHEEL_ERR[2 * i] * math.cos((i + 1) * th)
+               + WHEEL_ERR[2 * i + 1] * math.sin((i + 1) * th)
+               for i in range(len(WHEEL_ERR) // 2))
+
+def feed_angle_wheel_error(angle, t0, t1, pos, batch=100):
+    # Measured = true + error at the measured angle, as fitted on the bench
+    rows = []
+    for i in range(int(round((t1 - t0) / 0.001)) + 1):
+        t = t0 + i * 0.001
+        true = angle_counts(pos(t))
+        m = true
+        for _ in range(4):
+            m = true + int(round(wheel_err_deg(m) * 65536. / 360.))
+        rows.append((t, m))
+        if len(rows) >= batch:
+            angle.send(rows)
+            rows = []
+    if rows:
+        angle.send(rows)
+
+def run_short_push(extra):
+    # 40 mm at 2 mm/s: less than one wheel turn, like a low-flow step
+    printer, enc, angle = make_angle_encoder(extruder=lambda t: 2. * t,
+                                             extra=extra)
+    gcode, toolhead = printer.gcode, printer.toolhead
+    gcode.run('FLOW_MONITOR_START', LABEL='wheel', LOG='1', INTERVAL='0')
+    toolhead.flush(1.5)
+    gcode.run('FLOW_MONITOR_STOP')
+    toolhead.flush(21.5)
+    feed_angle_wheel_error(angle, 1., 22., lambda t: 2. * t)
+    return printer, enc
+
+def test_angle_correction():
+    printer, raw = run_short_push({})
+    res = raw.last_result
+    check(abs(res['length'] - 40.) > 0.1 and res['pulse_cv'] > 5.,
+          "without correction the wheel error shows: length %.3f mm,"
+          " pulse_cv %.1f %%" % (res['length'], res['pulse_cv']))
+    printer, fixed = run_short_push({'angle_correction': WHEEL_ERR})
+    res = fixed.last_result
+    check(abs(res['length'] - 40.) < 0.02,
+          "with angle_correction the length is %.4f mm of 40" % (res['length'],))
+    check(res['pulse_cv'] < 1.,
+          "with angle_correction pulse_cv is %.2f %%" % (res['pulse_cv'],))
+    metas = glob.glob(os.path.join(printer.log_dir, "*_meta.json"))
+    meta = json.load(open(metas[0]))
+    check(meta['angle_correction_deg'] == WHEEL_ERR,
+          "meta file holds the correction")
+    try:
+        make_angle_encoder(extra={'angle_correction': [1., 2., 3.]})
+    except StubError:
+        check(True, "config error: angle_correction with an odd count")
+    else:
+        raise AssertionError("no config error for an odd angle_correction")
+
 def test_angle_errors_and_config():
     printer, enc, angle = make_angle_encoder()
     angle.send([], errors=3)
@@ -996,7 +1063,8 @@ def main():
              test_side_files_and_anchors, test_stream_force_source,
              test_angle_constant_speed, test_angle_noise,
              test_angle_run_signed, test_angle_reversed,
-             test_angle_with_sfs_ref, test_angle_errors_and_config]
+             test_angle_with_sfs_ref, test_angle_correction,
+             test_angle_errors_and_config]
     for test in tests:
         print("== %s" % (test.__name__,))
         test()
